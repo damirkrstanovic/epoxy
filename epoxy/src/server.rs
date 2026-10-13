@@ -70,7 +70,7 @@ pub struct Server<F> {
 
 impl<F> Server<F>
 where
-    F: FnOnce() -> (Nss, XmlSec)
+    F: FnOnce() -> (Nss, XmlSec),
 {
     pub fn new(
         config: ServerConfig,

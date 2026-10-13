@@ -455,6 +455,7 @@ dependencies = [
  "futures",
  "gtk4",
  "hex",
+ "libc",
  "libxml",
  "oneshot",
  "rpassword",
