@@ -193,3 +193,5 @@ Independent review identified four Important issues: inactivity timeouts allowed
 - Final: Ruling: generated binding lint defects stay outside this feature — no generated-code lint suppression — cost if wrong: strict workspace lint stays red.
 - Final: Ruling: no file sink; host retention applies — optional sink is not required — cost if wrong: no built-in file rotation.
 - Final: Ruling: use Linux procfs FD paths and already-transitive Socket2 for anchoring/bounded connect — avoids user-path races and handwritten sockaddr code — cost if wrong: installations without mounted procfs cannot run controls, documented.
+
+Local testing follow-up: a missing control subdirectory produced a misleading nonsymlink-component error. Preserve OS error causes during no-follow traversal and distinguish ENOENT for the client control directory with "start Epoxy first". The new missing-endpoint regression failed before the change and passes afterward; default and CLI-only suites now each have 29 tests. Symlink/ownership protections are unchanged.

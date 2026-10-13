@@ -14,6 +14,9 @@ epoxy diagnostics enable --level debug --requests masked --ttl 300
 epoxy diagnostics disable
 ```
 
+Start Epoxy before using these commands. If the control directory is absent,
+the CLI reports `no Epoxy diagnostics endpoint; start Epoxy first`.
+
 These commands contact the running Epoxy process. They do not start another
 signing server, initialize NSS or open a PIN dialog. They also work while a
 native PIN prompt is waiting. Later tray controls can use the same controller.

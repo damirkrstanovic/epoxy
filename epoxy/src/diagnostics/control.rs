@@ -38,10 +38,10 @@ fn open_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> Result<fs::Fil
             libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
     };
-    ensure!(
-        fd >= 0,
-        "cannot open nonsymlink runtime directory component"
-    );
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("cannot open nonsymlink runtime directory component");
+    }
     // openat returned a new descriptor, transferred exactly once to File ownership.
     Ok(unsafe { fs::File::from_raw_fd(fd) })
 }
@@ -86,7 +86,18 @@ fn endpoint(runtime: &Path, create: bool) -> Result<(fs::File, PathBuf)> {
             anyhow::bail!("cannot create private diagnostics directory");
         }
     }
-    let directory = open_directory_at(&root, c"epoxy")?;
+    let directory = match open_directory_at(&root, c"epoxy") {
+        Ok(directory) => directory,
+        Err(error)
+            if !create
+                && error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            anyhow::bail!("no Epoxy diagnostics endpoint; start Epoxy first");
+        }
+        Err(error) => return Err(error),
+    };
     validate_private_directory(&directory)?;
     // Linux has no bindat: the process-owned /proc descriptor path anchors bind,
     // connect and cleanup to this verified directory. No user symlink is followed.
@@ -583,5 +594,14 @@ mod tests {
             fs::read(temp.0.join("epoxy/control.sock")).unwrap(),
             b"replacement"
         );
+    }
+
+    #[test]
+    fn missing_endpoint_explains_that_epoxy_must_be_started() {
+        let temp = Temp::new();
+        let error = request(&temp.0, &Command::Status {}).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("start Epoxy first"));
+        assert!(!message.contains("nonsymlink"));
     }
 }
