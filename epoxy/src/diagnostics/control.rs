@@ -328,22 +328,26 @@ mod tests {
     #[test]
     fn expiry_and_control_continue_while_other_work_is_blocked() {
         let temp = Temp::new();
-        let (diagnostics, _subscriber) = subscriber("warn", std::io::sink).unwrap();
-        let _server = ControlServer::start(diagnostics, &temp.0).unwrap();
-        request(
-            &temp.0,
-            &Command::Enable {
-                level: Level::Debug,
-                requests: Requests::Masked,
-                ttl: 1,
-            },
-        )
-        .unwrap();
-        // Mimics a synchronous native callback holding the application's execution thread.
-        std::thread::sleep(Duration::from_millis(1150));
-        let state = request(&temp.0, &Command::Status {}).unwrap();
-        assert!(!state.requests_masked);
-        assert_eq!(state.filter, "warn");
+        let (diagnostics, subscriber) = subscriber("warn", std::io::sink).unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            let _server = ControlServer::start(diagnostics, &temp.0).unwrap();
+            request(
+                &temp.0,
+                &Command::Enable {
+                    level: Level::Debug,
+                    requests: Requests::Masked,
+                    ttl: 1,
+                },
+            )
+            .unwrap();
+            assert!(tracing::enabled!(target: "epoxy::server", tracing::Level::DEBUG));
+            // No status getter runs until after checking the actual subscriber filter.
+            std::thread::sleep(Duration::from_millis(1250));
+            assert!(!tracing::enabled!(target: "epoxy::server", tracing::Level::DEBUG));
+            let state = request(&temp.0, &Command::Status {}).unwrap();
+            assert!(!state.requests_masked);
+            assert_eq!(state.filter, "warn");
+        });
     }
     #[test]
     fn stalled_client_cannot_block_controls_indefinitely() {

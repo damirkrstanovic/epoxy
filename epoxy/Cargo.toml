@@ -36,3 +36,7 @@ xmlsec-nss-sys = { path = "../xmlsec-nss-sys" }
 default = ["systemd", "ui-gtk"]
 systemd = ["dep:sd-notify"]
 ui-gtk = ["dep:gtk4", "dep:oneshot"]
+
+[[example]]
+name = "ui"
+required-features = ["ui-gtk"]
