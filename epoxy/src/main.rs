@@ -1,4 +1,5 @@
 mod config;
+mod diagnostics;
 mod nss;
 mod pin;
 mod proto;
