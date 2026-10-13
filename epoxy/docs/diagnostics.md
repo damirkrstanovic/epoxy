@@ -29,7 +29,8 @@ Restarting always starts with payload tracing off.
 ## What a masked trace contains
 
 A masked trace preserves known protocol operations, numeric status/IDs and
-known container structure. It replaces PINs, session credentials, identity and
+known container structure at approved locations for that operation and
+request/response shape. A familiar field name in an unknown location is masked. It replaces PINs, session credentials, identity and
 unknown fields/values. XML is represented by its encoded byte length, not its
 contents. Unknown JSON field names are replaced by a count so credentials in a
 field name cannot escape masking. No unmasked mode exists.
@@ -51,11 +52,16 @@ backend-specific investigation; generic portal error codes remain compatible.
 The service requires `XDG_RUNTIME_DIR` to identify an absolute, nonsymlink
 runtime directory owned by the application user with permissions 700. Epoxy
 creates `XDG_RUNTIME_DIR/epoxy` with mode 700 and `control.sock` with mode 600.
+Every runtime path component is opened with no-follow directory traversal.
+Creation, binding, connection and cleanup remain anchored to verified directory
+descriptors through Linux `/proc/self/fd`; a mounted procfs is required.
 Both client and server verify Linux socket peer credentials. Controls are not
 available through the browser WebSocket, and no shared `/tmp` fallback exists.
 
 Control messages are limited to 8 KiB. A stalled control client has a 500 ms
-read deadline; CLI response waits are bounded to two seconds. The independent
+absolute deadline for the entire connection, including reads and writes;
+trickling bytes cannot restart it. CLI connect, command write and response read
+share an absolute two-second deadline. The independent
 control thread checks expiry every 50 ms when idle, with bounded additional
 delay while handling a client. Application native signing/PIN waits do not
 block that thread.

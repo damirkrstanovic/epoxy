@@ -49,65 +49,146 @@ pub fn known_operation(value: &str) -> Option<&'static str> {
     }
 }
 
-fn sanitize(value: Value) -> Value {
-    match value {
-        Value::Object(fields) => {
-            let mut result = Map::new();
-            let mut unknown = 0;
-            for (key, value) in fields {
-                let safe = match key.as_str() {
-                    "operation" => value
-                        .as_str()
-                        .and_then(known_operation)
-                        .map(Value::from)
-                        .unwrap_or(json!("[MASKED]")),
-                    "status" | "id" | "providerId" | "terminalId" | "appBuild" => {
-                        value.as_u64().map(Value::from).unwrap_or(json!("[MASKED]"))
-                    }
-                    "alias" => match value.as_str() {
-                        Some(s)
-                            if s.len() <= 20
-                                && !s.is_empty()
-                                && s.bytes().all(|b| b.is_ascii_digit()) =>
-                        {
-                            json!(s)
-                        }
-                        _ => json!("[MASKED]"),
-                    },
-                    "input" | "payload" | "certificate" => {
-                        if value.is_object() {
-                            sanitize(value)
-                        } else {
-                            json!("[MASKED]")
-                        }
-                    }
-                    "providers" | "terminals" | "certificates" => {
-                        if value.is_array() {
-                            sanitize(value)
-                        } else {
-                            json!("[MASKED]")
-                        }
-                    }
-                    "xml" => json!({"masked": true, "bytes": value.as_str().map(str::len)}),
-                    "pin" | "name" | "sbSession" | "host" | "language" | "certificateId"
-                    | "appName" | "appVersion" | "osName" | "osVersion" | "osArch" => {
-                        json!("[MASKED]")
-                    }
-                    _ => {
-                        unknown += 1;
-                        continue;
-                    }
-                };
-                result.insert(key, safe);
-            }
-            if unknown > 0 {
-                result.insert("_masked_fields".into(), json!(unknown));
-            }
-            Value::Object(result)
+#[derive(Clone, Copy)]
+enum Shape {
+    Root {
+        operation: &'static str,
+        response: bool,
+    },
+    Input(&'static str),
+    Payload(&'static str),
+    Certificate,
+    Provider,
+    Terminal,
+}
+
+enum Rule {
+    Operation,
+    Number,
+    Alias,
+    Mask,
+    Document,
+    Object(Shape),
+    Array(Shape),
+}
+
+fn rule(shape: Shape, key: &str) -> Option<Rule> {
+    use Rule::*;
+    match (shape, key) {
+        (Shape::Root { .. }, "operation") => Some(Operation),
+        (Shape::Root { response: true, .. }, "status") => Some(Number),
+        (
+            Shape::Root {
+                operation,
+                response: false,
+            },
+            "input",
+        ) if operation != "GET_PROVIDERS" && operation != "ON_OPEN_EVENT" => {
+            Some(Object(Shape::Input(operation)))
         }
-        Value::Array(items) => Value::Array(items.into_iter().map(sanitize).collect()),
-        _ => json!("[MASKED]"),
+        (
+            Shape::Root {
+                operation,
+                response: true,
+            },
+            "payload",
+        ) => Some(Object(Shape::Payload(operation))),
+        (Shape::Input("GET_INFO"), "sbSession" | "host" | "language") => Some(Mask),
+        (Shape::Input("GET_TERMINALS"), "providerId") => Some(Number),
+        (Shape::Input("GET_CERTIFICATES"), "terminalId") => Some(Number),
+        (Shape::Input("GET_CERTIFICATES" | "GET_SIGNED_XML"), "pin") => Some(Mask),
+        (Shape::Input("GET_SIGNED_XML"), "certificate") => Some(Object(Shape::Certificate)),
+        (Shape::Input("GET_SIGNED_XML") | Shape::Payload("GET_SIGNED_XML"), "xml") => {
+            Some(Document)
+        }
+        (Shape::Payload("GET_INFO"), "providerId" | "terminalId") => Some(Number),
+        (Shape::Payload("GET_INFO"), "certificateId") => Some(Mask),
+        (Shape::Payload("GET_PROVIDERS"), "providers") => Some(Array(Shape::Provider)),
+        (Shape::Payload("GET_TERMINALS"), "terminals") => Some(Array(Shape::Terminal)),
+        (Shape::Payload("GET_CERTIFICATES"), "certificates") => Some(Array(Shape::Certificate)),
+        (Shape::Payload("ON_OPEN_EVENT"), "appBuild") => Some(Number),
+        (
+            Shape::Payload("ON_OPEN_EVENT"),
+            "appName" | "appVersion" | "osName" | "osVersion" | "osArch",
+        ) => Some(Mask),
+        (Shape::Certificate, "alias") => Some(Alias),
+        (Shape::Certificate | Shape::Provider | Shape::Terminal, "name") => Some(Mask),
+        (Shape::Provider | Shape::Terminal, "id") => Some(Number),
+        _ => None,
     }
+}
+
+fn sanitize(value: Value) -> Value {
+    let Some(fields) = value.as_object() else {
+        return json!({"trace_omitted": "unsupported_shape"});
+    };
+    let Some(operation) = fields
+        .get("operation")
+        .and_then(Value::as_str)
+        .and_then(known_operation)
+    else {
+        return json!({"trace_omitted": "unknown_operation"});
+    };
+    let response = fields.contains_key("status")
+        || fields.contains_key("payload")
+        || operation == "ON_OPEN_EVENT";
+    if response && fields.contains_key("input") {
+        return json!({"trace_omitted": "ambiguous_shape"});
+    }
+    sanitize_object(
+        value,
+        Shape::Root {
+            operation,
+            response,
+        },
+    )
+}
+
+fn sanitize_object(value: Value, shape: Shape) -> Value {
+    let Value::Object(fields) = value else {
+        return json!("[MASKED]");
+    };
+    let mut result = Map::new();
+    let mut unknown = 0;
+    for (key, value) in fields {
+        let safe = match rule(shape, &key) {
+            Some(Rule::Operation) => value
+                .as_str()
+                .and_then(known_operation)
+                .map(Value::from)
+                .unwrap_or(json!("[MASKED]")),
+            Some(Rule::Number) => value.as_u64().map(Value::from).unwrap_or(json!("[MASKED]")),
+            Some(Rule::Alias) => match value.as_str() {
+                Some(s)
+                    if s.len() <= 20 && !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) =>
+                {
+                    json!(s)
+                }
+                _ => json!("[MASKED]"),
+            },
+            Some(Rule::Mask) => json!("[MASKED]"),
+            Some(Rule::Document) => json!({"masked": true, "bytes": value.as_str().map(str::len)}),
+            Some(Rule::Object(child)) => sanitize_object(value, child),
+            Some(Rule::Array(child)) => match value {
+                Value::Array(items) => Value::Array(
+                    items
+                        .into_iter()
+                        .map(|item| sanitize_object(item, child))
+                        .collect(),
+                ),
+                _ => json!("[MASKED]"),
+            },
+            None => {
+                unknown += 1;
+                continue;
+            }
+        };
+        result.insert(key, safe);
+    }
+    if unknown > 0 {
+        result.insert("_masked_fields".into(), json!(unknown));
+    }
+    Value::Object(result)
 }
 
 #[cfg(test)]
@@ -158,11 +239,15 @@ mod tests {
     #[test]
     fn safe_metadata_survives_but_identity_does_not() {
         let value = masked_wire(
-            r#"{"operation":"GET_CERTIFICATES","status":0,"payload":{"certificates":[{"alias":"1","name":"Synthetic Čertificate"}],"terminals":[{"id":1,"name":"Synthetic Token"}],"sbSession":"encoded-secret"}}"#,
+            r#"{"operation":"GET_CERTIFICATES","status":0,"payload":{"certificates":[{"alias":"1","name":"Synthetic Čertificate"}],"sbSession":"encoded-secret"}}"#,
         );
         assert_eq!(value["status"], 0);
         assert_eq!(value["payload"]["certificates"][0]["alias"], "1");
-        assert_eq!(value["payload"]["terminals"][0]["id"], 1);
+        let terminals = masked_wire(
+            r#"{"operation":"GET_TERMINALS","status":0,"payload":{"terminals":[{"id":1,"name":"Synthetic Token"}]}}"#,
+        );
+        assert_eq!(terminals["payload"]["terminals"][0]["id"], 1);
+        assert!(!terminals.to_string().contains("Synthetic"));
         assert!(!value.to_string().contains("Synthetic"));
         assert!(!value.to_string().contains("encoded-secret"));
     }
@@ -173,5 +258,16 @@ mod tests {
             masked_wire(r#"{"operation":"GET_SIGNED_XML","payload":{"xml":"PHNlY3JldC8+"}}"#);
         assert_eq!(value["payload"]["xml"]["bytes"], 12);
         assert!(!value.to_string().contains("PHNlY3JldC8+"));
+    }
+
+    #[test]
+    fn misplaced_known_fields_cannot_disclose_credentials() {
+        for input in [
+            r#"{"operation":"GET_INFO","input":{"alias":"123456","id":123456,"status":123456,"certificate":{"alias":"123456"}}}"#,
+            r#"{"operation":"GET_INFO","payload":{"providers":[{"id":123456}],"alias":"123456"}}"#,
+            r#"{"operation":"GET_SIGNED_XML","input":{"certificate":{"alias":"0","input":{"terminalId":123456}}}}"#,
+        ] {
+            assert!(!masked_wire(input).to_string().contains("123456"));
+        }
     }
 }

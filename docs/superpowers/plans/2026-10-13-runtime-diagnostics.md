@@ -6,7 +6,7 @@
 
 **Architecture:** A shared diagnostics controller owns a reloadable tracing filter and separate masked-payload policy. A private Unix socket, served by a dedicated control thread, exposes typed commands to the CLI and later the tray. The browser protocol remains unchanged; sanitization happens before any request/response tracing.
 
-**Tech Stack:** Existing Rust/Tokio/tracing/serde/clap stack; standard-library Unix sockets; direct libc dependency for effective UID verification. No new GTK/tray or signing dependencies in this PR.
+**Tech Stack:** Existing Rust/Tokio/tracing/serde/clap stack; standard-library Unix sockets; direct libc dependency for effective UID verification. No new GTK/tray or signing dependencies in this PR. Socket2, already a transitive dependency, supplies bounded nonblocking connect.
 
 **Spec:** `docs/superpowers/specs/2026-10-13-linux-native-epoxy-design.md`, runtime logging section, with the no-caching policy in `docs/superpowers/specs/2026-10-13-usability-and-pin-sessions.md`.
 
@@ -174,6 +174,22 @@ This PR is complete only when masked tracing, dynamic controls, expiry and safe 
 
 ## Execution record
 
-Implemented on `codex/runtime-diagnostics` from fork master. Full workspace and CLI-only suites each pass 23 tests, and the foreground app passes a synthetic CLI/WebSocket smoke test without initializing NSS or requesting a PIN. Formatting and application-only Clippy (`--no-deps`, default and CLI builds) pass. The two specified strict Clippy commands fail on 17 warnings in unchanged generated NSS bindings: `missing_safety_doc`, `useless_transmute` and `ptr_offset_with_cast`; the binding crate was left unchanged.
+Implemented on `codex/runtime-diagnostics` from fork master. Full workspace and CLI-only suites each pass 28 tests, and the foreground app passes a synthetic CLI/WebSocket smoke test without initializing NSS or requesting a PIN. Formatting and application-only Clippy (`--no-deps`, default and CLI builds) pass. The two specified strict Clippy commands fail on 17 warnings in unchanged generated NSS bindings: `missing_safety_doc`, `useless_transmute` and `ptr_offset_with_cast`; the binding crate was left unchanged.
 
 The GTK-only UI example now declares `required-features = ["ui-gtk"]`, so complete CLI test builds no longer try to import an unavailable UI module. Control commands use empty struct variants instead of unit variants because serde's unit variants ignored extra fields despite `deny_unknown_fields`; regression tests enforce rejection. Diagnostics currently use stderr/journal only, with host-managed retention. No file sink, PIN caching or session retention was added.
+
+Independent review identified four Important issues: inactivity timeouts allowed slow trickles, client connect could block on a full backlog, intermediate links were followed, and known field names were preserved outside their schema positions. Five regression tests failed before fixes and pass afterward, including directory-substitution cleanup. The fix uses absolute connection deadlines, Socket2 bounded connect, no-follow openat/mkdirat traversal with descriptor-anchored procfs paths, and operation/shape-aware masking. No second review or additional feature scope was added.
+
+## Decisions and review limits
+
+- Ruling: No new file sink in this PR; stderr/journal only — optional file output is not required by spec — host owns retention.
+- Ruling: Reviewed/approved plan explicitly specifies this sibling worktree path — no further worktree permission required.
+- Task 3: Ruling: serde unit command variants ignored unknown fields despite deny_unknown_fields — use empty struct variants and enforce rejection tests — costs a local typed command syntax change only.
+- Task 5: Ruling: gate the pre-existing GTK-only ui example with required-features — CLI full tests otherwise fail on unresolved epoxy::ui — no runtime behavior changes.
+- Task 5: Ruling: keep generated binding lint failures outside this diagnostics PR — unchanged xmlsec-nss-sys source generates 17 strict Clippy errors (missing_safety_doc/useless_transmute/ptr_offset_with_cast) — strict workspace lint remains blocked, application lint checked separately.
+- Final: Ruling: real card/NSS/qualified-certificate correctness remains backend work — synthetic diagnostics tests cannot establish it — cost if wrong: no ESS compatibility claim can be made.
+- Final: Ruling: Origin/signing authorization/browser limits stay in separate approved feature PR — diagnostic controls remain off the browser socket — cost if wrong: existing browser boundary limitations persist until that PR.
+- Final: Ruling: external native stderr/core dumps remain outside masking — documented explicitly — cost if wrong: external tooling may disclose data despite safe application events.
+- Final: Ruling: generated binding lint defects stay outside this feature — no generated-code lint suppression — cost if wrong: strict workspace lint stays red.
+- Final: Ruling: no file sink; host retention applies — optional sink is not required — cost if wrong: no built-in file rotation.
+- Final: Ruling: use Linux procfs FD paths and already-transitive Socket2 for anchoring/bounded connect — avoids user-path races and handwritten sockaddr code — cost if wrong: installations without mounted procfs cannot run controls, documented.
