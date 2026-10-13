@@ -281,7 +281,11 @@ mod tests {
             fs::metadata(&socket).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(!request(&temp.0, &Command::Status {}).unwrap().requests_masked);
+        assert!(
+            !request(&temp.0, &Command::Status {})
+                .unwrap()
+                .requests_masked
+        );
         assert!(
             request(
                 &temp.0,
@@ -294,7 +298,11 @@ mod tests {
             .unwrap()
             .requests_masked
         );
-        assert!(!request(&temp.0, &Command::Disable {}).unwrap().requests_masked);
+        assert!(
+            !request(&temp.0, &Command::Disable {})
+                .unwrap()
+                .requests_masked
+        );
         drop(server);
         assert!(!socket.exists());
     }
@@ -344,7 +352,11 @@ mod tests {
         let _server = ControlServer::start(diagnostics, &temp.0).unwrap();
         let _stalled = UnixStream::connect(temp.0.join("epoxy/control.sock")).unwrap();
         let start = std::time::Instant::now();
-        assert!(!request(&temp.0, &Command::Status {}).unwrap().requests_masked);
+        assert!(
+            !request(&temp.0, &Command::Status {})
+                .unwrap()
+                .requests_masked
+        );
         assert!(start.elapsed() < Duration::from_secs(2));
     }
 
@@ -376,7 +388,11 @@ mod tests {
                 serde_json::from_slice::<Reply>(&data).unwrap(),
                 Reply::Error(_)
             ));
-            assert!(!request(&temp.0, &Command::Status {}).unwrap().requests_masked);
+            assert!(
+                !request(&temp.0, &Command::Status {})
+                    .unwrap()
+                    .requests_masked
+            );
         }
     }
     #[test]

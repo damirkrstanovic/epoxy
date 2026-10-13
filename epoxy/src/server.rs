@@ -1,4 +1,11 @@
-use std::cell::LazyCell;
+use crate::diagnostics::Diagnostics;
+use std::{
+    cell::{Cell, LazyCell},
+    rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Instant,
+};
+static NEXT_CORRELATION: AtomicU64 = AtomicU64::new(1);
 
 use anyhow::{Context, Error, Result, anyhow};
 use futures::{SinkExt, StreamExt, TryStreamExt, future};
@@ -8,7 +15,7 @@ use libxml::{
 };
 use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use tungstenite::{Message, Utf8Bytes};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
@@ -28,7 +35,6 @@ impl TryFrom<Response> for Message {
         let text = Utf8Bytes::from(
             serde_json::to_string(&response).context("failed to serialize response")?,
         );
-        debug!("response: {}", text);
 
         let message = Message::Text(text);
         Ok(message)
@@ -42,12 +48,19 @@ impl TryFrom<Message> for Request {
         let text = request
             .into_text()
             .context("failed to convert WebSocket message to text")?;
-        debug!("request: {}", text);
 
-        let request =
-            serde_json::from_slice(text.as_bytes()).context("failed to deserialize request")?;
-        Ok(request)
+        parse_request(&text)
     }
+}
+
+fn parse_request(text: &str) -> Result<Request> {
+    serde_json::from_str(text).map_err(|e| {
+        anyhow!(
+            "invalid protocol request at line {} column {}",
+            e.line(),
+            e.column()
+        )
+    })
 }
 
 #[derive(Debug, Default)]
@@ -63,6 +76,7 @@ pub struct ServerConfig {
 
 pub struct Server<F> {
     config: ServerConfig,
+    diagnostics: Diagnostics,
     pin_prompt: Box<dyn PinPrompt>,
     nss_xmlsec: LazyCell<(Nss, XmlSec), F>,
     xml_parser: Parser,
@@ -76,9 +90,11 @@ where
         config: ServerConfig,
         pin_prompt: Box<dyn PinPrompt>,
         nss_xmlsec: LazyCell<(Nss, XmlSec), F>,
+        diagnostics: Diagnostics,
     ) -> Server<F> {
         Server {
             config,
+            diagnostics,
             pin_prompt,
             nss_xmlsec,
             xml_parser: Parser::default(),
@@ -88,11 +104,53 @@ where
     pub async fn run(&self, ws_stream: WebSocketStream<TcpStream>) -> Result<()> {
         let (tx, rx) = ws_stream.split();
 
-        let mut tx = Box::pin(tx.with(|response| future::ready(Message::try_from(response))));
+        let context = Rc::new(Cell::new((0, Instant::now())));
+        let operation_context = context.clone();
+        let response_context = context.clone();
+        let response_diagnostics = self.diagnostics.clone();
+        let mut tx = Box::pin(tx.with(move |response: Response| {
+            let (correlation_id, started) = response_context.get();
+            info!(
+                correlation_id,
+                operation = response.operation(),
+                status = response.status(),
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "protocol operation completed"
+            );
+            let message = Message::try_from(response);
+            if let Ok(Message::Text(text)) = &message {
+                response_diagnostics.wire("response", text, correlation_id);
+            }
+            future::ready(message)
+        }));
+        let request_diagnostics = self.diagnostics.clone();
         let mut rx = Box::pin(
             rx.try_take_while(|message| future::ok(!message.is_close()))
-                .map_err(|e| Error::new(e).context("WebSocket connection error"))
-                .and_then(|message| future::ready(Request::try_from(message))),
+                .map_err(|_| anyhow!("WebSocket transport error"))
+                .and_then(move |message| {
+                    let correlation_id = NEXT_CORRELATION.fetch_add(1, Ordering::Relaxed);
+                    context.set((correlation_id, Instant::now()));
+                    let request = message
+                        .into_text()
+                        .map_err(|_| anyhow!("invalid WebSocket text message"))
+                        .and_then(|text| {
+                            request_diagnostics.wire("request", &text, correlation_id);
+                            parse_request(&text)
+                        });
+                    match &request {
+                        Ok(request) => info!(
+                            correlation_id,
+                            operation = request.operation(),
+                            "protocol operation received"
+                        ),
+                        Err(_) => warn!(
+                            correlation_id,
+                            error_kind = "invalid_request",
+                            "protocol request rejected"
+                        ),
+                    }
+                    future::ready(request)
+                }),
         );
 
         let session = self
@@ -100,7 +158,7 @@ where
             .await
             .context("protocol handshake failed")?;
 
-        self.handle_requests(tx, rx, session)
+        self.handle_requests(tx, rx, session, operation_context)
             .await
             .context("request handler failed")
     }
@@ -135,19 +193,28 @@ where
         mut tx: impl SinkExt<Response, Error = Error> + Unpin,
         mut rx: impl TryStreamExt<Ok = Request, Error = Error> + Unpin,
         mut session: Session,
+        context: Rc<Cell<(u64, Instant)>>,
     ) -> Result<()> {
         while let Some(request) = rx.try_next().await? {
-            let response = match request {
-                Request::GetInfo(_) => Response::GetInfo(self.get_info()),
-                Request::GetProviders => Response::GetProviders(self.get_providers()),
-                Request::GetTerminals(_) => {
-                    Response::GetTerminals(self.get_terminals(&mut session))
-                }
-                Request::GetCertificates(req) => {
-                    Response::GetCertificates(self.get_certificates(&mut session, req))
-                }
-                Request::GetSignedXml(req) => {
-                    Response::GetSignedXml(self.get_signed_xml(&session, req))
+            let response = {
+                let span = tracing::info_span!(
+                    "operation",
+                    correlation_id = context.get().0,
+                    operation = request.operation()
+                );
+                let _entered = span.enter();
+                match request {
+                    Request::GetInfo(_) => Response::GetInfo(self.get_info()),
+                    Request::GetProviders => Response::GetProviders(self.get_providers()),
+                    Request::GetTerminals(_) => {
+                        Response::GetTerminals(self.get_terminals(&mut session))
+                    }
+                    Request::GetCertificates(req) => {
+                        Response::GetCertificates(self.get_certificates(&mut session, req))
+                    }
+                    Request::GetSignedXml(req) => {
+                        Response::GetSignedXml(self.get_signed_xml(&session, req))
+                    }
                 }
             };
             tx.send(response).await?;
@@ -223,7 +290,10 @@ where
         // here PIN will be requested only if the token doesn't allow passwordless access to certs
         let pin_context = self.get_pin_context(None, String::from("List certificates"));
         let Ok(certs) = nss.get_certs_in_token(&pin_context, &token) else {
-            warn!("failed to log in to {}", token.name());
+            warn!(
+                error_kind = "authentication_failed",
+                "token authentication failed"
+            );
             return ResultResponse::error(responses::GetCertificatesErrorCode::GenericError);
         };
         let Some(certs) = certs else {
@@ -244,7 +314,10 @@ where
             }
 
             if !x509.validity().is_valid() {
-                warn!("certificate \"{label}\" is either expired or not yet active");
+                warn!(
+                    error_kind = "certificate_validity",
+                    "certificate is expired or not yet active"
+                );
                 return None;
             }
 
@@ -293,11 +366,14 @@ where
             None => String::from("Sign form (unidentified)"),
         };
 
-        info!("signature request: {}: {}", cert_label, reason);
+        info!("signature requested");
         {
             let pin_context = self.get_pin_context(Some(cert_label.clone()), reason);
             let Ok(_logout_guard) = nss.authenticate(&pin_context, &token) else {
-                warn!("failed to log in to {}", token.name());
+                warn!(
+                    error_kind = "authentication_failed",
+                    "token authentication failed"
+                );
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             };
 
@@ -355,4 +431,123 @@ fn try_identify_form(document: &Document) -> Option<EporeziFormKind> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> MakeWriter<'a> for Capture {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+    #[test]
+    fn parsing_error_does_not_echo_invalid_operation() {
+        let error = Request::try_from(Message::text(
+            r#"{"operation":"synthetic-secret","input":{"pin":"synthetic-secret"}}"#,
+        ))
+        .unwrap_err();
+        assert!(!format!("{error:#}").contains("synthetic-secret"));
+    }
+    #[test]
+    fn protocol_conversions_do_not_emit_raw_data_at_trace_level() {
+        let capture = Capture::default();
+        let (_diagnostics, subscriber) =
+            crate::diagnostics::subscriber("trace", capture.clone()).unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            let request = Request::try_from(Message::text(r#"{"operation":"GET_CERTIFICATES","input":{"terminalId":1,"pin":"synthetic-secret"}}"#)).unwrap();
+            assert!(matches!(request, Request::GetCertificates(_)));
+            let response =
+                Response::GetCertificates(ResultResponse::success(responses::GetCertificates {
+                    certificates: vec![responses::Certificate {
+                        alias: 0,
+                        name: "Synthetic Čertificate".into(),
+                    }],
+                }));
+            let message = Message::try_from(response).unwrap();
+            assert!(message.to_text().unwrap().contains("Synthetic Čertificate"));
+            let response =
+                Response::GetSignedXml(ResultResponse::success(responses::GetSignedXml {
+                    xml: b"<secret/>".to_vec(),
+                }));
+            let _ = Message::try_from(response).unwrap();
+            let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+            for secret in ["synthetic-secret", "Synthetic Čertificate", "PHNlY3JldC8+"] {
+                assert!(!output.contains(secret));
+            }
+        });
+    }
+
+    #[test]
+    fn websocket_flow_toggles_masked_tracing_without_loading_nss() {
+        struct NoPin;
+        impl PinPrompt for NoPin {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("this protocol test must not request a PIN")
+            }
+        }
+        let capture = Capture::default();
+        let (diagnostics, subscriber) =
+            crate::diagnostics::subscriber("trace", capture.clone()).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = Server::new(ServerConfig { allow_soft_tokens: false }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone());
+            let server_flow = async {
+                let (stream, _) = listener.accept().await.unwrap();
+                server.run(tokio_tungstenite::accept_async(stream).await.unwrap()).await.unwrap();
+            };
+            let client_flow = async {
+                let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{address}")).await.unwrap();
+                let opening = client.next().await.unwrap().unwrap();
+                let opening: serde_json::Value = serde_json::from_str(opening.to_text().unwrap()).unwrap();
+                assert_eq!(opening["operation"], "ON_OPEN_EVENT");
+                let input = r#"{"operation":"GET_INFO","input":{"sbSession":"synthetic-secret","host":"synthetic-host","language":"sr","pin":"synthetic-secret"}}"#;
+                client.send(Message::text(input)).await.unwrap();
+                let response = client.next().await.unwrap().unwrap();
+                let response: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+                assert_eq!(response["status"], 0);
+                assert!(!String::from_utf8_lossy(&capture.0.lock().unwrap()).contains("masked protocol trace"));
+                diagnostics.enable(crate::diagnostics::Level::Debug, true, 300).unwrap();
+                client.send(Message::text(r#"{"operation":"GET_PROVIDERS"}"#)).await.unwrap();
+                let response = client.next().await.unwrap().unwrap();
+                let response: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+                assert_eq!(response["payload"]["providers"][0]["name"], "NSS");
+                client.send(Message::text(input)).await.unwrap();
+                assert!(client.next().await.unwrap().is_ok());
+                let traces = String::from_utf8_lossy(&capture.0.lock().unwrap()).matches("masked protocol trace").count();
+                assert_eq!(traces, 4);
+                diagnostics.disable().unwrap();
+                client.send(Message::text(input)).await.unwrap();
+                assert!(client.next().await.unwrap().is_ok());
+                let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+                assert_eq!(output.matches("masked protocol trace").count(), traces);
+                for sensitive in ["synthetic-secret", "synthetic-host"] { assert!(!output.contains(sensitive)); }
+                assert!(output.contains("correlation_id"));
+                assert!(output.contains("elapsed_ms"));
+                client.close(None).await.unwrap();
+            };
+            tokio::join!(server_flow, client_flow);
+        })
+        });
+    }
 }

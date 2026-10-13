@@ -55,7 +55,12 @@ async fn main() -> Result<()> {
     let server_config = ServerConfig {
         allow_soft_tokens: config.allow_soft_tokens,
     };
-    let server = Rc::new(Server::new(server_config, pin_prompt, nss_xmlsec));
+    let server = Rc::new(Server::new(
+        server_config,
+        pin_prompt,
+        nss_xmlsec,
+        diagnostics,
+    ));
     let server_fut = serve(
         config.max_connections,
         config.max_idle_seconds,
@@ -207,8 +212,11 @@ where
         Ok(()) => {
             info!("connection closed: {peer_addr}");
         }
-        Err(e) => {
-            warn!("connection terminated: {peer_addr} {e}")
+        Err(_) => {
+            warn!(
+                error_kind = "protocol_or_transport",
+                "connection terminated: {peer_addr}"
+            )
         }
     }
 }
