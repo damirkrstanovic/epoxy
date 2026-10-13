@@ -81,7 +81,7 @@ Use a native StatusNotifierItem implementation, preferably the Rust `ksni` backe
 
 Tray menu actions include application/service status, selected context, choose context, enable/disable diagnostics, open the private log location, and quit. Do not put the full personal certificate subject or identifiers into diagnostic logs when displaying them in native UI. Native window-close and Cancel actions must resolve pending requests promptly. Quitting cancels prompts and shuts down sockets cleanly.
 
-The [usability and PIN session review](2026-10-13-usability-and-pin-sessions.md) records source findings and proposed refinements. Use a compact contextual authorization dialog with explicit action buttons and complete keyboard/cancellation handling. Signing approval must be independent of a PIN callback, so an already-authenticated token cannot silently authorize new signatures. Optional short authenticated-session retention is a separate proposed feature, subject to token policy and live ESS validation; it does not imply application PIN storage or bypass per-use authentication.
+The [usability and PIN session review](2026-10-13-usability-and-pin-sessions.md) records source findings and proposed refinements. Use a compact contextual authorization dialog with explicit action buttons and complete keyboard/cancellation handling. Signing approval must be independent of a PIN callback, so an already-authenticated token cannot silently authorize new signatures. PIN caching and convenience authenticated-session retention are excluded. Keep authentication operation-scoped, preserve card-required per-use authentication, and remember only nonsecret context preferences.
 
 On desktops without StatusNotifierItem support, show a useful message and keep working. Document desktop-specific tray support requirements rather than installing shell extensions automatically. A default desktop installation retains GTK and tray support; a CLI-only build remains supported.
 
@@ -120,7 +120,7 @@ Provide source-release installation plus Arch, Debian/Ubuntu, and Fedora/RPM rec
 
 Use branches in `damirkrstanovic/epoxy`, one per independently reviewable PR. Prefer branches based on master for independent work; dependent PRs must state their base/dependency and avoid unrelated changes. Keep implementation plans and validation with the PR that implements them. Do not include SmartBox decompiled source, local runtime reports, real card data, or private diagnostic artifacts in PRs.
 
-Prepare each feature for potential later upstream submission, with focused APIs, tests and documentation. Dependent PRs must expose only their own change against the prerequisite branch and explain the eventual integration order. Do not submit PRs or merge requests to the original author's repository. Keep optional authenticated-session retention separate from dialog cleanup and backend setup.
+Prepare each feature for potential later upstream submission, with focused APIs, tests and documentation. Dependent PRs must expose only their own change against the prerequisite branch and explain the eventual integration order. Do not submit PRs or merge requests to the original author's repository. Do not introduce PIN caching or convenience authenticated-session retention in any PR.
 
 ## Verification criteria
 
