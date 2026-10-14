@@ -247,18 +247,28 @@ fn discovery_defaults_to_one_signing_domain_and_never_switches_a_missing_choice(
     );
 }
 #[test]
-fn automatic_selection_requires_one_eligible_identity_in_a_dedicated_signing_context() {
+fn automatic_selection_uses_a_sole_eligible_identity_without_a_profile_label() {
     let (controller, _) = CertificateController::new();
     controller.publish(vec![signing_context(b"a", 1), signing_context(b"b", 2)]);
     assert!(controller.snapshot().selected.is_none());
+    let mut general_a = signing_context(b"general-a", 5);
+    let mut general_b = signing_context(b"general-b", 6);
+    general_a.label = "General PIN".into();
+    general_b.label = "General PIN".into();
+    controller.publish(vec![general_a, general_b]);
+    assert!(
+        controller.snapshot().selected.is_none(),
+        "multiple general certificates require a choice"
+    );
     let mut expired = signing_context(b"c", 3);
     expired.certificates[0].eligibility = Eligibility::Expired;
     controller.publish(vec![expired]);
     assert!(controller.snapshot().selected.is_none());
     let mut general = signing_context(b"d", 4);
     general.label = "General PIN".into();
+    let key = general.certificates[0].key.clone();
     controller.publish(vec![general]);
-    assert!(controller.snapshot().selected.is_none());
+    assert!(controller.snapshot().selected == Some(key));
 }
 #[test]
 fn person_name_is_shown_without_the_certificates_common_name_identifier() {
