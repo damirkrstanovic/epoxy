@@ -48,7 +48,14 @@ impl XmlSec {
 
         let code = unsafe {
             let abi_compat_mode = xmlSecCheckVersionMode_xmlSecCheckVersionABICompatible;
-            xmlSecCheckVersionExt(1, 3, 0, abi_compat_mode)
+            // Bindings describe these exact system headers. Reject runtime ABI
+            // mismatches, while supporting both distro XMLSec 1.2 and 1.3.
+            xmlSecCheckVersionExt(
+                XMLSEC_VERSION_MAJOR as _,
+                XMLSEC_VERSION_MINOR as _,
+                XMLSEC_VERSION_SUBMINOR as _,
+                abi_compat_mode,
+            )
         };
         if code == 0 {
             return Err(InitError::IncompatibleVersion);
@@ -117,6 +124,44 @@ impl<'a> Drop for XmlSigner<'a> {
     }
 }
 
+// XMLSec 1.2's certificate loader only extracts the public key. Attach the
+// corresponding NSS private-key handle explicitly on all supported versions.
+// The caller has already authenticated; the existing matches_token check must
+// still reject a key from any other slot before signing. No key material leaves NSS.
+unsafe fn attach_private_key(key: xmlSecKeyPtr, der: &nss::SecItem) -> bool {
+    // All acquired references are either destroyed here or transferred exactly
+    // once to XMLSec. This follows xmlSecNssX509CertGetKey's adoption contract.
+    unsafe {
+        let cert = CERT_FindCertByDERCert(CERT_GetDefaultCertDB(), der.as_ptr() as *mut _);
+        if cert.is_null() {
+            return false;
+        }
+        let public = CERT_ExtractPublicKey(cert);
+        let private = PK11_FindKeyByAnyCert(cert, null_mut());
+        CERT_DestroyCertificate(cert);
+        if public.is_null() || private.is_null() {
+            if !public.is_null() {
+                SECKEY_DestroyPublicKey(public);
+            }
+            if !private.is_null() {
+                SECKEY_DestroyPrivateKey(private);
+            }
+            return false;
+        }
+        let data = xmlSecNssPKIAdoptKey(private, public);
+        if data.is_null() {
+            SECKEY_DestroyPublicKey(public);
+            SECKEY_DestroyPrivateKey(private);
+            return false;
+        }
+        if xmlSecKeySetValue(key, data) < 0 {
+            xmlSecKeyDataDestroy(data);
+            return false;
+        }
+        true
+    }
+}
+
 impl<'a> XmlSigner<'a> {
     pub fn with_cert(
         _xmlsec: &'a XmlSec,
@@ -143,8 +188,13 @@ impl<'a> XmlSigner<'a> {
                 xmlSecKeyDataFormat_xmlSecKeyDataFormatCertDer,
             )
         };
-        if key_ptr.is_null() {
-            unsafe { xmlSecDSigCtxDestroy(dsig_ptr) };
+        if key_ptr.is_null() || !unsafe { attach_private_key(key_ptr, cert_item) } {
+            unsafe {
+                if !key_ptr.is_null() {
+                    xmlSecKeyDestroy(key_ptr);
+                }
+                xmlSecDSigCtxDestroy(dsig_ptr);
+            }
             return Err(SignerInitError::KeyLoad);
         };
 
