@@ -33,6 +33,7 @@ struct ConfigSlice {
     pub max_idle_seconds: Option<u32>,
     pub pin_prompt: Option<PinPromptKind>,
     pub allow_soft_tokens: Option<bool>,
+    pub show_window: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -44,6 +45,7 @@ pub struct Config {
     pub max_idle_seconds: u32,
     pub pin_prompt: PinPromptKind,
     pub allow_soft_tokens: bool,
+    pub show_window: bool,
 }
 
 impl Default for Config {
@@ -56,6 +58,7 @@ impl Default for Config {
             max_idle_seconds: 0,
             pin_prompt: PinPromptKind::default(),
             allow_soft_tokens: false,
+            show_window: false,
         }
     }
 }
@@ -70,6 +73,7 @@ impl Config {
             max_idle_seconds: slice.max_idle_seconds.unwrap_or(self.max_idle_seconds),
             pin_prompt: slice.pin_prompt.unwrap_or(self.pin_prompt),
             allow_soft_tokens: slice.allow_soft_tokens.unwrap_or(self.allow_soft_tokens),
+            show_window: slice.show_window.unwrap_or(self.show_window),
         }
     }
 }
@@ -131,6 +135,10 @@ pub struct ClapConfig {
     /// Include certificates from software PKCS#11 tokens for testing
     allow_soft_tokens: bool,
 
+    /// Open the GTK control window at startup (requires UI PIN prompt)
+    #[arg(long)]
+    show_window: bool,
+
     /// Print default config
     #[serde(skip)]
     #[arg(long, default_value_t = false)]
@@ -184,9 +192,48 @@ pub fn get_config() -> Result<Config, anyhow::Error> {
         max_idle_seconds: get_cli_value(&matches, "max_idle_seconds"),
         pin_prompt: get_cli_value(&matches, "pin_prompt"),
         allow_soft_tokens: get_cli_value(&matches, "allow_soft_tokens"),
+        show_window: get_cli_value(&matches, "show_window"),
     };
 
     let config = default_config.merge(toml_slice).merge(cli_slice);
 
+    config.validate()?;
     Ok(config)
+}
+
+impl Config {
+    fn validate(&self) -> anyhow::Result<()> {
+        #[cfg(feature = "ui-gtk")]
+        let gui = matches!(self.pin_prompt, PinPromptKind::Ui);
+        #[cfg(not(feature = "ui-gtk"))]
+        let gui = false;
+        anyhow::ensure!(
+            !self.show_window || gui,
+            "--show-window requires a GTK build and --pin-prompt ui"
+        );
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn show_window_requires_gui_prompt_and_honors_config_precedence() {
+        let mut config = Config::default();
+        config.pin_prompt = PinPromptKind::Tty;
+        config.show_window = true;
+        assert!(config.validate().is_err());
+        config.show_window = false;
+        assert!(config.validate().is_ok());
+        let slice: ConfigSlice = toml::from_str("show_window = true").unwrap();
+        assert!(config.merge(slice).show_window);
+        #[cfg(feature = "ui-gtk")]
+        {
+            let config = Config::default().merge(ConfigSlice {
+                show_window: Some(true),
+                ..Default::default()
+            });
+            assert!(config.validate().is_ok());
+        }
+    }
 }

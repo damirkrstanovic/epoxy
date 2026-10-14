@@ -68,16 +68,34 @@ fn desktop_widgets_and_pin_lifecycle() {
     assert!(control.is_visible());
     for action in ["close", "Cancel", "Enter", "Continue", "Escape", "shutdown"] {
         let (tx, rx) = oneshot::channel();
-        pin_tx
-            .try_send((
-                PinInfo {
-                    cert: Some("Synthetic long certificate name Čertificate ".repeat(4)),
-                    reason: "Sign test declaration".into(),
-                },
-                "Synthetic Digital Signature PIN".into(),
-                tx,
-            ))
-            .unwrap();
+        let worker = if action == "shutdown" {
+            let prompt = UiPrompt {
+                sender: pin_tx.clone(),
+                controller: controller.clone(),
+            };
+            Some(std::thread::spawn(move || {
+                let result = prompt.prompt_pin(
+                    &PinInfo {
+                        cert: None,
+                        reason: "Synthetic signing".into(),
+                    },
+                    "Synthetic token".into(),
+                );
+                let _ = tx.send(result);
+            }))
+        } else {
+            pin_tx
+                .try_send((
+                    PinInfo {
+                        cert: Some("Synthetic long certificate name Čertificate ".repeat(4)),
+                        reason: "Sign test declaration".into(),
+                    },
+                    "Synthetic Digital Signature PIN".into(),
+                    tx,
+                ))
+                .unwrap();
+            None
+        };
         pump();
         let window = app
             .windows()
@@ -144,6 +162,9 @@ fn desktop_widgets_and_pin_lifecycle() {
             rx.recv_timeout(Duration::from_millis(100)).unwrap(),
             expected
         );
+        if let Some(worker) = worker {
+            worker.join().unwrap();
+        }
         assert!(entry.text().is_empty());
         assert!(!format!("{:?}", controller.snapshot()).contains("synthetic-secret"));
     }

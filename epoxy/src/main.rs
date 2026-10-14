@@ -21,7 +21,7 @@ use tracing::{debug, info, warn};
 use crate::{
     config::{PinPromptKind, get_config},
     nss::Nss,
-    pin::{PinMethod, tty_pin_method},
+    pin::tty_pin_method,
     server::{Server, ServerConfig},
     xmlsec::XmlSec,
 };
@@ -35,10 +35,38 @@ async fn main() -> Result<()> {
     let _control = diagnostics::control::ControlServer::start(diagnostics.clone(), &runtime)
         .context("failed to initialize diagnostics controls")?;
 
+    let controller = desktop::DesktopController::new(diagnostics.clone());
+    let _lifetime = controller.service_lifetime();
     let listener = get_listener(config.endpoint).await?;
-
+    controller.set_ready(listener.local_addr()?);
     let pin_method_ct = CancellationToken::new();
-    let (pin_prompt, pin_method_fut) = get_pin_method(config.pin_prompt, pin_method_ct.clone());
+    #[cfg(feature = "tray")]
+    let mut tray = None;
+    #[cfg(feature = "ui-gtk")]
+    let gui = matches!(config.pin_prompt, PinPromptKind::Ui);
+    #[cfg(not(feature = "ui-gtk"))]
+    let gui = false;
+    let (pin_prompt, mut pin_method_fut) = match config.pin_prompt {
+        PinPromptKind::Tty => tty_pin_method(pin_method_ct.clone()),
+        #[cfg(feature = "ui-gtk")]
+        PinPromptKind::Ui => {
+            let (method, handle) = ui::desktop_pin_method(
+                controller.clone(),
+                config.show_window,
+                pin_method_ct.clone(),
+            );
+            #[cfg(feature = "tray")]
+            {
+                tray = desktop::tray::start_tray(controller.clone(), handle).ok();
+            }
+            #[cfg(not(feature = "tray"))]
+            {
+                let _ = handle;
+                controller.set_tray(desktop::TrayAvailability::Unavailable);
+            }
+            method
+        }
+    };
 
     let nss_xmlsec = LazyCell::new(move || {
         let nss = Nss::initialize(config.nssdb_path).expect("failed to initialize NSS");
@@ -55,7 +83,8 @@ async fn main() -> Result<()> {
         server_config,
         pin_prompt,
         nss_xmlsec,
-        diagnostics,
+        diagnostics.clone(),
+        controller.clone(),
     ));
     let server_fut = serve(
         config.max_connections,
@@ -64,10 +93,23 @@ async fn main() -> Result<()> {
         server,
     );
 
-    select! {
-        _ = server_fut => pin_method_ct.cancel(),
-        _ = pin_method_fut => (),
+    let shutdown = controller.shutdown_requested();
+    let ui_exited = select! {
+        _ = server_fut => false,
+        _ = &mut pin_method_fut => true,
+        _ = shutdown.cancelled() => false,
+    };
+    // The service future and all native sessions have dropped before GUI completion.
+    controller.request_quit();
+    drop(_control);
+    #[cfg(feature = "tray")]
+    drop(tray);
+    controller.service_finished();
+    pin_method_ct.cancel();
+    if gui && !ui_exited {
+        pin_method_fut.await;
     }
+    info!("service stopped");
 
     Ok(())
 }
@@ -77,17 +119,6 @@ fn init_tracing(log_spec: &str) -> Result<diagnostics::Diagnostics> {
     tracing::subscriber::set_global_default(subscriber)
         .context("failed to install tracing subscriber")?;
     Ok(diagnostics)
-}
-
-fn get_pin_method(pin_prompt: PinPromptKind, ct: CancellationToken) -> PinMethod {
-    #[cfg(feature = "ui-gtk")]
-    use crate::ui::ui_pin_method;
-
-    match pin_prompt {
-        config::PinPromptKind::Tty => tty_pin_method(ct),
-        #[cfg(feature = "ui-gtk")]
-        config::PinPromptKind::Ui => ui_pin_method(ct),
-    }
 }
 
 async fn get_listener(endpoint: String) -> Result<TcpListener> {

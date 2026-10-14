@@ -1,3 +1,4 @@
+use crate::desktop::{DesktopController, OperationKind};
 use crate::diagnostics::Diagnostics;
 use std::{
     cell::{Cell, LazyCell},
@@ -77,6 +78,7 @@ pub struct ServerConfig {
 pub struct Server<F> {
     config: ServerConfig,
     diagnostics: Diagnostics,
+    desktop: DesktopController,
     pin_prompt: Box<dyn PinPrompt>,
     nss_xmlsec: LazyCell<(Nss, XmlSec), F>,
     xml_parser: Parser,
@@ -91,10 +93,12 @@ where
         pin_prompt: Box<dyn PinPrompt>,
         nss_xmlsec: LazyCell<(Nss, XmlSec), F>,
         diagnostics: Diagnostics,
+        desktop: DesktopController,
     ) -> Server<F> {
         Server {
             config,
             diagnostics,
+            desktop,
             pin_prompt,
             nss_xmlsec,
             xml_parser: Parser::default(),
@@ -102,6 +106,11 @@ where
     }
 
     pub async fn run(&self, ws_stream: WebSocketStream<TcpStream>) -> Result<()> {
+        let _connection = self.desktop.connection_started();
+        anyhow::ensure!(
+            !self.desktop.shutdown_requested().is_cancelled(),
+            "service shutting down"
+        );
         let (tx, rx) = ws_stream.split();
 
         let context = Rc::new(Cell::new((0, Instant::now())));
@@ -183,7 +192,16 @@ where
             return Err(anyhow!("invalid first GET_INFO request"));
         }
 
-        tx.send(Response::GetInfo(self.get_info())).await?;
+        anyhow::ensure!(
+            !self.desktop.shutdown_requested().is_cancelled(),
+            "service shutting down"
+        );
+        let operation = self
+            .desktop
+            .operation_started(0, OperationKind::Information);
+        let response = Response::GetInfo(self.get_info());
+        operation.complete(response.status());
+        tx.send(response).await?;
 
         Ok(Session::default())
     }
@@ -196,6 +214,18 @@ where
         context: Rc<Cell<(u64, Instant)>>,
     ) -> Result<()> {
         while let Some(request) = rx.try_next().await? {
+            anyhow::ensure!(
+                !self.desktop.shutdown_requested().is_cancelled(),
+                "service shutting down"
+            );
+            let kind = match &request {
+                Request::GetSignedXml(_) => OperationKind::Signing,
+                Request::GetCertificates(_) | Request::GetTerminals(_) => {
+                    OperationKind::Enumeration
+                }
+                _ => OperationKind::Information,
+            };
+            let operation = self.desktop.operation_started(context.get().0, kind);
             let response = {
                 let span = tracing::info_span!(
                     "operation",
@@ -217,6 +247,7 @@ where
                     }
                 }
             };
+            operation.complete(response.status());
             tx.send(response).await?;
         }
         Ok(())
@@ -343,6 +374,9 @@ where
         session: &Session,
         request: requests::GetSignedXml,
     ) -> ResultResponse<responses::GetSignedXml, responses::GetSignedXmlErrorCode> {
+        if self.desktop.shutdown_requested().is_cancelled() {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        }
         let (ref nss, ref xmlsec) = *self.nss_xmlsec;
 
         let cert = session.certs.get(request.certificate.alias);
@@ -381,11 +415,17 @@ where
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             };
 
+            if self.desktop.shutdown_requested().is_cancelled() {
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            }
             let Ok(()) = signer.sign(&mut document) else {
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             };
         }
 
+        if self.desktop.shutdown_requested().is_cancelled() {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        }
         let xml = document.to_string().into_bytes();
 
         ResultResponse::success(responses::GetSignedXml { xml })
@@ -456,6 +496,40 @@ mod tests {
         }
     }
     #[test]
+    fn shutdown_rejects_queued_signing_before_native_initialization() {
+        struct NoPin;
+        impl PinPrompt for NoPin {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("cancelled work must not prompt")
+            }
+        }
+        let (diagnostics, _subscriber) =
+            crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+        let desktop = DesktopController::new(diagnostics.clone());
+        let server = Server::new(
+            ServerConfig {
+                allow_soft_tokens: false,
+            },
+            Box::new(NoPin),
+            LazyCell::new(|| panic!("cancelled work must not initialize NSS")),
+            diagnostics,
+            desktop.clone(),
+        );
+        desktop.request_quit();
+        let response = server.get_signed_xml(
+            &Session::default(),
+            requests::GetSignedXml {
+                certificate: requests::Certificate {
+                    alias: 0,
+                    name: String::new(),
+                },
+                pin: String::new(),
+                xml: b"<synthetic/>".to_vec(),
+            },
+        );
+        assert!(matches!(response, ResultResponse::Error(_)));
+    }
+    #[test]
     fn parsing_error_does_not_echo_invalid_operation() {
         let error = Request::try_from(Message::text(
             r#"{"operation":"synthetic-secret","input":{"pin":"synthetic-secret"}}"#,
@@ -511,7 +585,7 @@ mod tests {
             runtime.block_on(async {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
-            let server = Server::new(ServerConfig { allow_soft_tokens: false }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone());
+            let server = Server::new(ServerConfig { allow_soft_tokens: false }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone(),DesktopController::new(diagnostics.clone()));
             let server_flow = async {
                 let (stream, _) = listener.accept().await.unwrap();
                 server.run(tokio_tungstenite::accept_async(stream).await.unwrap()).await.unwrap();
@@ -526,6 +600,7 @@ mod tests {
                 let response = client.next().await.unwrap().unwrap();
                 let response: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
                 assert_eq!(response["status"], 0);
+                assert_eq!(server.desktop.snapshot().connections,1);
                 assert!(!String::from_utf8_lossy(&capture.0.lock().unwrap()).contains("masked protocol trace"));
                 diagnostics.enable(crate::diagnostics::Level::Debug, true, 300).unwrap();
                 client.send(Message::text(r#"{"operation":"GET_PROVIDERS"}"#)).await.unwrap();
@@ -547,6 +622,7 @@ mod tests {
                 client.close(None).await.unwrap();
             };
             tokio::join!(server_flow, client_flow);
+            assert_eq!(server.desktop.snapshot().connections,0);
         })
         });
     }
