@@ -181,6 +181,45 @@ fn desktop_widgets_and_pin_lifecycle() {
     }
     controller.service_finished();
     pump();
+    // A quiet launch falls back once; repeated host loss never re-presents it.
+    let (diagnostics, _subscriber) = crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+    let quiet = DesktopController::new(diagnostics);
+    quiet.set_tray(TrayAvailability::Unavailable);
+    let (_pin, pin_rx) = mpsc::channel(1);
+    let (_show, show_rx) = mpsc::channel(1);
+    let fallback = build_application(
+        pin_rx,
+        show_rx,
+        quiet.clone(),
+        false,
+        CancellationToken::new(),
+    );
+    fallback.set_application_id(Some("dev.semyon.epoxy.FallbackTest"));
+    fallback.register(None::<&gtk4::gio::Cancellable>).unwrap();
+    fallback.activate();
+    pump();
+    let window = fallback.windows().first().unwrap().clone();
+    assert!(!window.is_visible());
+    let until = Instant::now() + Duration::from_millis(2200);
+    while Instant::now() < until {
+        pump();
+    }
+    assert!(window.is_visible());
+    quiet.set_tray(TrayAvailability::Available);
+    window.close();
+    pump();
+    assert!(!window.is_visible());
+    quiet.set_tray(TrayAvailability::Unavailable);
+    let until = Instant::now() + Duration::from_millis(1100);
+    while Instant::now() < until {
+        pump();
+    }
+    assert!(
+        !window.is_visible(),
+        "repeated tray loss must not steal focus"
+    );
+    quiet.service_finished();
+    pump();
     // Without a tray, closing the control window requests service shutdown.
     let (diagnostics, _subscriber) = crate::diagnostics::subscriber("info", std::io::sink).unwrap();
     let no_tray = DesktopController::new(diagnostics);

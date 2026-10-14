@@ -21,6 +21,10 @@ dbus-run-session --config-file "$fixture/bus.conf" -- \
   cargo test -p epoxy --lib desktop::tray::bus_tests::delayed_watcher -- --ignored --test-threads=1
 dbus-run-session --config-file "$fixture/bus.conf" -- \
   cargo test -p epoxy --lib desktop::tray::bus_tests::nonresponding -- --ignored --test-threads=1
+dbus-run-session --config-file "$fixture/bus.conf" -- \
+  cargo test -p epoxy --lib watcher_without_host -- --ignored --test-threads=1
+dbus-run-session --config-file "$fixture/bus.conf" -- \
+  cargo test -p epoxy --lib late_watcher_transient -- --ignored --test-threads=1
 EPOXY_TEST_BUS_SOCKET="$fixture/restart-bus" DBUS_SESSION_BUS_ADDRESS="unix:path=$fixture/restart-bus" \
   cargo test -p epoxy --lib session_bus_restart_recovers -- --ignored --test-threads=1
 cargo build -p epoxy

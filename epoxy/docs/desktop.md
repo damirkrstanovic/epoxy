@@ -11,6 +11,9 @@ That interval is a usability fallback, not a permanent registration deadline:
 a late tray host can register without restarting Epoxy. Connection/registration
 attempts have five-second bounds and failures retry with backoff capped at 30 seconds.
 Each failed attempt releases its D-Bus runtime/connections before retrying.
+A watcher must report an active display host before Epoxy considers the tray available.
+Host changes are checked without cached properties; transient registration rejection
+also enters the retry path, even when watcher ownership does not change.
 
 Tray activation opens one control window. Its menu provides service status, Open
 Epoxy, five minutes of masked diagnostics, Disable diagnostics and Quit. The tray
@@ -64,7 +67,7 @@ scripts/test-desktop.sh
 `--show-window` requires a GTK build and `--pin-prompt ui`.
 The synthetic desktop script needs Python 3, Xvfb/xvfb-run and D-Bus. It uses a
 private bus without service activation directories and an explicit X11 backend,
-never the user's session bus, card, PIN or tax data. The four ignored GUI/bus tests
+never the user's session bus, card, PIN or tax data. The six ignored GUI/bus tests
 are run explicitly by that script, not silently treated as covered by `cargo test`.
 The daemon restart test owns a separate temporary bus. The helper smoke test
 checks GET_INFO, dynamic masked tracing/expiry, listener readiness, GUI presentation

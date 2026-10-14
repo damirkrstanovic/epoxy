@@ -1,9 +1,14 @@
 use super::*;
 use crate::ui::UiHandle;
 use ksni::{MenuItem, Tray, menu::StandardItem};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 struct EpoxyTray {
     controller: DesktopController,
     ui: UiHandle,
+    registered: Arc<AtomicBool>,
 }
 impl Tray for EpoxyTray {
     fn id(&self) -> String {
@@ -47,11 +52,22 @@ impl Tray for EpoxyTray {
     fn activate(&mut self, _x: i32, _y: i32) {
         self.ui.show_window();
     }
-    fn watcher_offline(&self, _reason: ksni::OfflineReason) -> bool {
+    fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
+        self.registered.store(false, Ordering::SeqCst);
         self.controller.set_tray(TrayAvailability::Unavailable);
-        true
+        // Ordinary absence keeps ksni's ownership monitor alive. A rejected
+        // registration must end this attempt so the outer retry can register again.
+        matches!(
+            reason,
+            ksni::OfflineReason::No
+                | ksni::OfflineReason::Error(ksni::Error::Watcher(
+                    zbus::fdo::Error::ServiceUnknown(_)
+                ))
+                | ksni::OfflineReason::Error(ksni::Error::WontShow)
+        )
     }
     fn watcher_online(&self) {
+        self.registered.store(true, Ordering::SeqCst);
         self.controller.set_tray(TrayAvailability::Pending);
     }
     fn menu(&self) -> Vec<MenuItem<Self>> {
@@ -133,6 +149,7 @@ mod tests {
         let mut tray = EpoxyTray {
             controller: controller.clone(),
             ui,
+            registered: Arc::new(AtomicBool::new(true)),
         };
         let menu = tray.menu();
         let activate = |menu: &Vec<MenuItem<EpoxyTray>>, index: usize, tray: &mut EpoxyTray| {
@@ -175,24 +192,41 @@ mod tests {
 mod bus_tests {
     use super::*;
     use std::{
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
     struct Watcher {
         registrations: Arc<Mutex<Vec<String>>>,
         stall: bool,
+        host: Arc<AtomicBool>,
+        failures: Arc<AtomicUsize>,
+        attempts: Arc<AtomicUsize>,
     }
     #[zbus::interface(name = "org.kde.StatusNotifierWatcher")]
     impl Watcher {
-        async fn register_status_notifier_item(&self, service: &str) {
+        async fn register_status_notifier_item(&self, service: &str) -> zbus::fdo::Result<()> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            if self
+                .failures
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+            {
+                return Err(zbus::fdo::Error::Failed(
+                    "synthetic temporary rejection".into(),
+                ));
+            }
             self.registrations.lock().unwrap().push(service.to_owned());
             if self.stall {
                 std::future::pending::<()>().await;
             }
+            Ok(())
         }
         #[zbus(property)]
         fn is_status_notifier_host_registered(&self) -> bool {
-            true
+            self.host.load(Ordering::SeqCst)
         }
         #[zbus(property)]
         fn protocol_version(&self) -> i32 {
@@ -240,6 +274,9 @@ mod bus_tests {
                     Watcher {
                         registrations: registrations.clone(),
                         stall: false,
+                        host: Arc::new(AtomicBool::new(true)),
+                        failures: Arc::new(AtomicUsize::new(0)),
+                        attempts: Arc::new(AtomicUsize::new(0)),
                     },
                 )
                 .unwrap()
@@ -335,6 +372,9 @@ mod bus_tests {
                     Watcher {
                         registrations: registrations.clone(),
                         stall: false,
+                        host: Arc::new(AtomicBool::new(true)),
+                        failures: Arc::new(AtomicUsize::new(0)),
+                        attempts: Arc::new(AtomicUsize::new(0)),
                     },
                 )
                 .unwrap()
@@ -356,6 +396,9 @@ mod bus_tests {
                     Watcher {
                         registrations: registrations.clone(),
                         stall: false,
+                        host: Arc::new(AtomicBool::new(true)),
+                        failures: Arc::new(AtomicUsize::new(0)),
+                        attempts: Arc::new(AtomicUsize::new(0)),
                     },
                 )
                 .unwrap()
@@ -387,6 +430,9 @@ mod bus_tests {
                     Watcher {
                         registrations: registrations.clone(),
                         stall: true,
+                        host: Arc::new(AtomicBool::new(true)),
+                        failures: Arc::new(AtomicUsize::new(0)),
+                        attempts: Arc::new(AtomicUsize::new(0)),
                     },
                 )
                 .unwrap()
@@ -404,6 +450,114 @@ mod bus_tests {
             let start = Instant::now();
             drop(tray);
             assert!(start.elapsed() < Duration::from_secs(2));
+        });
+    }
+    #[test]
+    #[ignore = "requires private dbus-run-session and EPOXY_PRIVATE_TEST_BUS=1"]
+    fn watcher_without_host_recovers_when_host_changes_without_owner_change() {
+        assert_eq!(std::env::var("EPOXY_PRIVATE_TEST_BUS").as_deref(), Ok("1"));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let registrations = Arc::new(Mutex::new(Vec::new()));
+            let host = Arc::new(AtomicBool::new(false));
+            let _watcher = zbus::connection::Builder::session()
+                .unwrap()
+                .name("org.kde.StatusNotifierWatcher")
+                .unwrap()
+                .serve_at(
+                    "/StatusNotifierWatcher",
+                    Watcher {
+                        registrations: registrations.clone(),
+                        stall: false,
+                        host: host.clone(),
+                        failures: Arc::new(AtomicUsize::new(0)),
+                        attempts: Arc::new(AtomicUsize::new(0)),
+                    },
+                )
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
+            let (diagnostics, _subscriber) =
+                crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+            let controller = DesktopController::new(diagnostics);
+            let (ui, _rx) = crate::ui::presentation_channel();
+            let tray = start_tray(controller.clone(), ui).unwrap();
+            tokio::time::sleep(Duration::from_millis(2200)).await;
+            assert_eq!(registrations.lock().unwrap().len(), 1);
+            assert_eq!(
+                controller.snapshot().tray,
+                TrayAvailability::Unavailable,
+                "watcher is not a display host"
+            );
+            host.store(true, Ordering::SeqCst);
+            wait_for(&controller, TrayAvailability::Available).await;
+            host.store(false, Ordering::SeqCst);
+            wait_for(&controller, TrayAvailability::Unavailable).await;
+            host.store(true, Ordering::SeqCst);
+            wait_for(&controller, TrayAvailability::Available).await;
+            assert_eq!(
+                registrations.lock().unwrap().len(),
+                1,
+                "host changes must not recreate the tray"
+            );
+            controller.service_finished();
+            drop(tray);
+        });
+    }
+    #[test]
+    #[ignore = "requires private dbus-run-session and EPOXY_PRIVATE_TEST_BUS=1"]
+    fn late_watcher_transient_rejection_retries_without_owner_change() {
+        assert_eq!(std::env::var("EPOXY_PRIVATE_TEST_BUS").as_deref(), Ok("1"));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (diagnostics, _subscriber) =
+                crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+            let controller = DesktopController::new(diagnostics);
+            let (ui, _rx) = crate::ui::presentation_channel();
+            let tray = start_tray(controller.clone(), ui).unwrap();
+            wait_for(&controller, TrayAvailability::Unavailable).await;
+            let registrations = Arc::new(Mutex::new(Vec::new()));
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let watcher = zbus::connection::Builder::session()
+                .unwrap()
+                .name("org.kde.StatusNotifierWatcher")
+                .unwrap()
+                .serve_at(
+                    "/StatusNotifierWatcher",
+                    Watcher {
+                        registrations: registrations.clone(),
+                        stall: false,
+                        host: Arc::new(AtomicBool::new(true)),
+                        failures: Arc::new(AtomicUsize::new(1)),
+                        attempts: attempts.clone(),
+                    },
+                )
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
+            wait_for(&controller, TrayAvailability::Available).await;
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+            assert_eq!(registrations.lock().unwrap().len(), 1);
+            let daemon = zbus::fdo::DBusProxy::new(&watcher).await.unwrap();
+            let prefix = format!("org.kde.StatusNotifierItem-{}-", std::process::id());
+            let live = daemon
+                .list_names()
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|name| name.as_str().starts_with(&prefix))
+                .count();
+            assert_eq!(live, 1, "failed attempt must release its previous tray");
+            controller.service_finished();
+            drop(tray);
         });
     }
 }
@@ -492,7 +646,9 @@ async fn run_attempt(
         result=tokio::time::timeout(Duration::from_secs(5),zbus::Connection::session())=>
             match result {Ok(Ok(bus))=>bus,_=>return Err("tray_connection")}
     };
+    let registered = Arc::new(AtomicBool::new(true));
     let spawn = EpoxyTray {
+        registered: registered.clone(),
         controller: controller.clone(),
         ui,
     }
@@ -504,18 +660,32 @@ async fn run_attempt(
             Ok(Ok(handle))=>handle,Ok(Err(_))=>return Err("tray_connection"),Err(_)=>return Err("tray_registration_timeout"),
         }
     };
-    controller.confirm_tray();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
             _=stop.cancelled()=>break,_=completion.cancelled()=>break,
+            _=bus.closed()=>return Err("tray_bus_disconnected"),
             _=tick.tick()=> {
                 if handle.is_closed() {return Err("tray_connection_closed");}
                 // update waits behind watcher registration; only confirm after it finishes.
                 let update=tokio::time::timeout(Duration::from_secs(5),handle.update(|_|()));
                 let result=tokio::select! {_=stop.cancelled()=>break,_=completion.cancelled()=>break,_=bus.closed()=>return Err("tray_bus_disconnected"),result=update=>result};
                 if !matches!(result,Ok(Some(()))) {return Err("tray_update_timeout");}
-                controller.confirm_tray();
+                if registered.load(Ordering::SeqCst) {
+                    // Use an uncached Properties.Get: watcher ownership alone does not
+                    // imply a display host, and host changes may omit property signals.
+                    let probe=async {
+                        let proxy=zbus::Proxy::new(&bus,"org.kde.StatusNotifierWatcher","/StatusNotifierWatcher","org.freedesktop.DBus.Properties").await?;
+                        let value:zbus::zvariant::OwnedValue=proxy.call("Get",&("org.kde.StatusNotifierWatcher","IsStatusNotifierHostRegistered")).await?;
+                        bool::try_from(value).map_err(zbus::Error::from)
+                    };
+                    let host=tokio::select! {
+                        _=stop.cancelled()=>break,_=completion.cancelled()=>break,
+                        _=bus.closed()=>return Err("tray_bus_disconnected"),
+                        result=tokio::time::timeout(Duration::from_secs(5),probe)=>match result {Ok(Ok(host))=>host,_=>return Err("tray_host_probe")}
+                    };
+                    controller.set_tray(if host && registered.load(Ordering::SeqCst) {TrayAvailability::Available} else {TrayAvailability::Unavailable});
+                } else {controller.set_tray(TrayAvailability::Unavailable);}
             }
         }
     }

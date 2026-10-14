@@ -200,7 +200,7 @@ certificate manager, browser companion or backend migration is included.
 - Queued-signing regression originally initialized NSS after shutdown; it now returns
   the compatible error without invoking native initialization. Connection accounting
   is verified over a real synthetic WebSocket handshake.
-- Default workspace: 38 automatic tests pass; four GUI/bus tests run separately.
+- Default workspace: 38 automatic tests pass; six GUI/bus tests run separately.
   CLI-only: 35 tests pass. GTK without tray: 37 automatic tests pass, GUI test separate.
   Application-only Clippy with `--all-targets --no-deps -D warnings` passes in all three
   configurations; generated NSS bindings retain the previously established workspace
@@ -212,3 +212,23 @@ certificate manager, browser companion or backend migration is included.
   timing; these are not cold filesystem-cache benchmarks. No NSS/card/PIN access.
 - Actual Niri/Wayland tray rendering and user-run ESS portal checks remain manual QA.
   Native-library transient PIN buffers are unchanged; no compliance claim is made.
+
+### Independent review and final fixes
+
+The independent whole-branch review found no Critical or Minor findings and two
+Important tray issues. Both were reproduced before fixes: a watcher with no active
+host was falsely Available; a late watcher's temporary registration rejection never
+retried. Availability now requires a successfully registered tray and an uncached,
+bounded/cancellable host-property probe. Host presence changes recover on the same
+watcher without recreating the tray. Registration errors end the attempt and enter
+bounded background retry; ordinary watcher absence keeps ownership monitoring alive.
+The transient-rejection test verifies exactly one live tray remains after recovery.
+
+The GTK scenario additionally checks quiet-launch fallback, close-to-hide with a
+host, and no repeated presentation after host loss. Long synthetic labels were
+visually inspected at 100% and 200% scaling. Actual compositor focus/accessibility,
+ESS signing/portal acceptance, and broader native-buffer compliance remain user QA
+or separately scoped work. Reviewer deferrals concerning browser-disconnect/card
+removal/timeouts, approval without a PIN callback, context selection, certificate
+administration, Origin policy, browser integration and packaging agree with the
+approved feature boundaries and are not hidden completion claims for this PR.
