@@ -65,18 +65,14 @@ impl Tray for EpoxyTray {
     }
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let status = self.controller.diagnostics().status().ok();
-        let mut advanced = vec![
+        let advanced = vec![
             StandardItem {
-                label: "Advanced diagnostics…".into(),
+                label: "Log settings…".into(),
                 activate: Box::new(|tray: &mut Self| tray.ui.show_window()),
                 ..Default::default()
             }
             .into(),
-            MenuItem::Separator,
         ];
-        advanced.extend(super::certificate_menu::advanced(
-            self.controller.certificates(),
-        ));
         vec![
             StandardItem {
                 label: status_label(self.controller.snapshot().activity).into(),
@@ -85,7 +81,7 @@ impl Tray for EpoxyTray {
             }
             .into(),
             ksni::menu::SubMenu {
-                label: "Cards and certificates".into(),
+                label: "Certificates".into(),
                 submenu: super::certificate_menu::build(self.controller.certificates()),
                 ..Default::default()
             }
@@ -244,12 +240,24 @@ mod tests {
             labels,
             vec![
                 "Starting",
-                "Cards and certificates",
+                "Certificates",
                 "Enable troubleshooting logs (5 minutes)",
                 "Disable troubleshooting logs",
                 "Advanced",
                 "Quit Epoxy"
             ]
+        );
+        let advanced = menu
+            .iter()
+            .find_map(|item| match item {
+                MenuItem::SubMenu(s) if s.label == "Advanced" => Some(s),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            advanced.submenu.len(),
+            1,
+            "Advanced must not expose token/PIN context rows or automatic-mode controls"
         );
         (standard_action(&menu, "Enable troubleshooting logs (5 minutes)").activate)(&mut tray);
         assert!(controller.diagnostics().status().unwrap().requests_masked);
@@ -260,7 +268,7 @@ mod tests {
         (standard_action(&menu, "Disable troubleshooting logs").activate)(&mut tray);
         assert_eq!(controller.diagnostics().status().unwrap().filter, "warn");
         assert!(rx.try_recv().is_err());
-        (standard_action(&menu, "Advanced diagnostics…").activate)(&mut tray);
+        (standard_action(&menu, "Log settings…").activate)(&mut tray);
         assert_eq!(rx.try_recv().unwrap(), ());
         let menu = tray.menu();
         assert!(!standard_action(&menu, "Disable troubleshooting logs").enabled);

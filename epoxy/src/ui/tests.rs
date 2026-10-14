@@ -320,7 +320,7 @@ fn certificate_widgets_show_details_dispatch_choices_and_dismiss_without_quittin
     .unwrap();
     cert.holder = "<b>Željko_Čertificate</b> ".repeat(16);
     let key = cert.key.clone();
-    catalog.publish(vec![PublicContext {
+    catalog.publish_for_selection(vec![PublicContext {
         key: context,
         label: "Synthetic Digital Signature PIN".repeat(4),
         requires_authentication: false,
@@ -377,7 +377,7 @@ fn certificate_widgets_show_details_dispatch_choices_and_dismiss_without_quittin
         );
     }
 
-    button(view.window.upcast_ref(), "Use this certificate").emit_clicked();
+    button(view.window.upcast_ref(), "Use for signing").emit_clicked();
     match rx.try_recv().unwrap() {
         CertificateCommand::Select {
             key: k,
@@ -390,16 +390,18 @@ fn certificate_widgets_show_details_dispatch_choices_and_dismiss_without_quittin
     view.refresh();
     let guard = catalog.native_operation();
     view.refresh();
-    assert!(!button(view.window.upcast_ref(), "Use this certificate").is_sensitive());
+    assert!(!button(view.window.upcast_ref(), "Use for signing").is_sensitive());
     drop(guard);
+    catalog.commit_selection(Some(key.clone()), true);
     view.refresh();
+    assert!(!button(view.window.upcast_ref(), "Used for signing").is_sensitive());
     let advanced = descendants(view.window.upcast_ref())
         .into_iter()
         .find_map(|w| w.downcast::<gtk4::Expander>().ok())
         .unwrap();
     advanced.set_expanded(true);
     pump();
-    button(view.window.upcast_ref(), "Choose automatically").emit_clicked();
+    button(view.window.upcast_ref(), "Forget saved certificate choice").emit_clicked();
     assert!(matches!(
         rx.try_recv(),
         Ok(CertificateCommand::Clear { forget_saved: true })

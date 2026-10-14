@@ -1,37 +1,42 @@
 # Cards, certificates and signing contexts
 
 Desktop mode automatically scans public certificates once after the listener is
-ready, so an already connected card appears under **Cards and certificates**.
+ready, so an already connected card appears under **Certificates**.
 The scan uses the existing serialized native dispatcher and never requests a PIN.
 Opening the menu does not start an additional scan. Use **Refresh** after a card
 change or to retry discovery. Both startup discovery and Refresh read public metadata
 without authentication, regardless of NSS’s friendly configuration hint. A context
-that hides its certificates behind login is
-shown as requiring authentication; it can still be chosen through the portal's
-ordinary certificate flow, using Epoxy's native PIN dialog.
+that hides its certificates behind login does not expose a certificate in this
+public view; its certificate flow remains available through the portal, using
+request-scoped page PIN or native entry as described in [request PINs](request-pins.md).
 
 Certificates appear directly by holder and purpose, with the selected certificate
 marked. Personal names use given-name/surname attributes when present, avoiding
 certificate identifiers embedded in the common name. Open a certificate and choose
-**Use this certificate** to make it your preferred choice, including future launches.
+**Use for signing** to make it your preferred choice, including future launches.
 **Certificate details…** shows issuer, expiry and purpose. Expired/unsupported
 certificates remain inspectable but cannot be selected. Module and PIN-context
-information, plus **Choose automatically**, are under **Advanced**.
+information is available only in the optional details window under **Technical details**.
+The tray's Advanced menu contains **Log settings…**, not token/PIN-context rows.
 
 On public card discovery (Refresh or the portal's reader request), Epoxy automatically
-selects exactly one eligible certificate in a dedicated Digital Signature context
-when no choice is already active. It recognizes OpenSC's `Digital Signature PIN`
-label/suffix as a preference hint, not as proof of key identity or trust. Multiple
-candidates, duplicates or ineligible certificates require a choice. Other signing
+selects the sole eligible certificate when no choice is already active. When
+several eligible certificates exist, a unique eligible certificate in a dedicated
+Digital Signature context takes priority; otherwise the user must choose. It recognizes OpenSC's `Digital Signature PIN`
+label/suffix as a preference hint, not as proof of key identity or trust. Unresolved
+multiple candidates or duplicate identities require a choice; ineligible certificates
+are never selected automatically. Other signing
 certificates remain selectable. Eligibility retains the engine's RSA, digitalSignature
 and contentCommitment requirements; it does not establish trust/legal qualification.
 
 An existing explicit/remembered choice takes priority. If the selected identity
 disappears or becomes invalid/ambiguous, Epoxy never substitutes a different card.
-The top-level Advanced → **Choose automatically** uses a standard tray checkmark:
-it is checked in automatic mode and unchecked after **Use this certificate**.
-Choosing it while unchecked explicitly forgets the preference and returns to
-automatic selection; choosing it while already checked leaves the mode unchanged. Automatic choices make no preference writes. Remembered
+A selected certificate is marked and its **Used for signing** action is disabled:
+there is no manual selection to perform in the single-certificate case. For another
+certificate, open its row and choose **Use for signing**. This remembers that exact
+certificate for future launches. **Forget saved certificate choice** appears in
+Certificates only after an explicit choice; it deletes the preference and reapplies
+the default rule. There is no automatic-mode checkbox. Automatic choices make no preference writes. Remembered
 selection stores only nonsecret identity; no PIN is saved or cached.
 
 Reload the portal after changing certificates; previous aliases are invalidated.
@@ -42,8 +47,8 @@ calls are synchronous on the serialized service thread: a slow backend can delay
 protocol processing until it returns. While card work or PIN entry is active,
 controls report Busy.
 
-GTK fallback provides the same compact certificate list, **Use this certificate**,
-**Certificate details…**, Refresh and collapsed Advanced controls. Close/Escape
+GTK fallback provides the same compact certificate list, **Use for signing**,
+**Certificate details…**, Refresh and conditional saved-choice controls. Close/Escape
 dismiss certificate windows without quitting the helper. Labels are plain text and
 bounded; no certificate data is used as markup or menu access keys.
 

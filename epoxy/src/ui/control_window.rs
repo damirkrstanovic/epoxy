@@ -44,7 +44,7 @@ impl ControlWindow {
         status.add_css_class("title-2");
         let endpoint = label("");
         let activity = label("");
-        let certificates = Button::with_label("Cards and certificates…");
+        let certificates = Button::with_label("Certificates…");
         certificates.connect_clicked({
             let app = app.clone();
             let catalog = controller.certificates().clone();
@@ -52,7 +52,7 @@ impl ControlWindow {
                 if let Some(window) = app
                     .windows()
                     .into_iter()
-                    .find(|w| w.title().as_deref() == Some("Cards and certificates"))
+                    .find(|w| w.title().as_deref() == Some("Certificates"))
                 {
                     window.present();
                 } else {

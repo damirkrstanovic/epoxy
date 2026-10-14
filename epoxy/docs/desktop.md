@@ -16,14 +16,15 @@ Host changes are checked without cached properties; transient registration rejec
 also enters the retry path, even when watcher ownership does not change.
 
 Tray activation opens the host-rendered tray menu, without mapping a control
-window. The top-level order is service status, Cards and certificates,
+window. The top-level order is service status, Certificates,
 “Enable troubleshooting logs (5 minutes)”, “Disable troubleshooting logs”, then
-Advanced, then Quit Epoxy. Advanced contains diagnostics, the checked automatic
-certificate-selection mode and technical context details. Troubleshooting request logs mask sensitive
-data and automatically return to normal logging after five minutes. Advanced diagnostics opens the optional GTK window
+Advanced, then Quit Epoxy. Advanced contains Log settings; certificate choices
+and details are under Certificates. Raw module/PIN-context rows and the automatic
+selection checkbox are absent from the tray. Troubleshooting request logs mask sensitive
+data and automatically return to normal logging after five minutes. Log settings opens the optional GTK window
 only on explicit selection. The window has a visible Hide window button when a
 tray is available, plus keyboard/window-close dismissal; Quit is a separate action. The tray
-shows certificate metadata only inside the explicitly opened Cards and certificates
+shows certificate metadata only inside the explicitly opened Certificates
 submenu. Its tooltip and service status contain no certificate/token identities,
 PINs or document data. Its embedded
 smart-card icon has a light surface and dark outline, supplied as 16/24/32/48 px
@@ -33,11 +34,14 @@ must supply a StatusNotifierItem host to display it; Epoxy does not install or
 configure shell extensions or bars.
 
 Tray popup dismissal and focus restoration belong to the tray host. In
-DankMaterialShell, activating a leaf action starts an 80 ms timer that closes the
-popup, returning focus to the previously focused window. Epoxy's certificate and
-logging actions do not request a GTK window or change window focus. The standard
+DankMaterialShell, version 1.6.2 starts an 80 ms timer after a leaf action that closes the popup
+and releases its layer-shell keyboard focus. Certificate actions and the two
+troubleshooting-log toggles do not request GTK presentation or window focus.
+Log settings intentionally opens the GTK control window. The user reports focus
+returning to the launch terminal; whether restoration follows the previously
+focused browser has not yet been verified. The standard
 tray menu protocol provides no keep-open control. See the
-[DMS tray implementation](https://github.com/AvengeMedia/DankMaterialShell/blob/master/quickshell/Modules/DBar/Widgets/SystemTrayBar.qml).
+[DMS tray implementation](https://github.com/AvengeMedia/DankMaterialShell/blob/v1.6.2/quickshell/Modules/DankBar/Widgets/SystemTrayBar.qml).
 
 There is currently no separate Stop/Start service control. Quit Epoxy shuts down
 both the listener and the tray; launch Epoxy again to restart it.
@@ -67,7 +71,7 @@ opaque native signature already executing cannot be interrupted or undone; it ca
 delay exit, and a signed response is suppressed if shutdown has been requested.
 TTY mode retains its existing terminal input/signal behavior.
 
-[Cards and certificates](certificates.md) provides public certificate details and
+[Certificates](certificates.md) provides public certificate details and
 explicit signing-context selection from the tray or the optional GTK certificate view.
 Key generation, imports/deletion, PIN changes and trust administration remain outside
 Epoxy. The existing NSS/XMLSec/OpenSC signing path and protocol are retained.
