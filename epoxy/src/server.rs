@@ -856,7 +856,7 @@ mod tests {
             runtime.block_on(async {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
-            let server = Server::new(ServerConfig { allow_soft_tokens: false }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone(),DesktopController::new(diagnostics.clone()));
+            let server = Server::new(ServerConfig { allow_soft_tokens: false, selection_path: "/synthetic/unused/selection.json".into() }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone(),DesktopController::new(diagnostics.clone()));
             let server_flow = async {
                 let (stream, _) = listener.accept().await.unwrap();
                 server.run(tokio_tungstenite::accept_async(stream).await.unwrap()).await.unwrap();
