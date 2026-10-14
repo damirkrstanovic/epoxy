@@ -65,7 +65,7 @@ def main():
             # Preserve upstream notices, including nested Unicode/third-party notices.
             retained = []
             for file in sorted(crate.rglob("*")):
-                if file.is_file() and file.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "COPYRIGHT", "NOTICE", "AUTHORS", "README")):
+                if file.is_file() and file.name.upper().startswith(("LICENSE", "LICENCE", "UNLICENSE", "COPYING", "COPYRIGHT", "NOTICE", "AUTHORS", "README")):
                     relative = file.relative_to(crate)
                     target = destination / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -87,7 +87,7 @@ def main():
         spec = (source / "packaging/fedora/epoxy-signing.spec.in").read_text().replace("@VERSION@", version).replace("@BUNDLED_LICENSES@", combined)
         (source / "packaging/fedora/epoxy-signing.spec").write_text(spec)
         archive = output / (name + ".tar.xz")
-        env = os.environ | {"XZ_OPT": "-T1"}
+        env = os.environ | {"XZ_OPT": "-T1 -3"}
         subprocess.run(["tar", "--sort=name", f"--mtime=@{epoch}", "--owner=0", "--group=0", "--numeric-owner", "-cJf", str(archive), "-C", str(temp), name], check=True, env=env)
         checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
         pkgbuild = (source / "packaging/arch/PKGBUILD.in").read_text().replace("@VERSION@", version).replace("@SHA256@", checksum).replace("@BUNDLED_LICENSES@", combined)

@@ -6,6 +6,7 @@ if [[ $# != 2 || -z $1 || $1 == / ]]; then
     exit 2
 fi
 stage=$(realpath -m "$1")
+[[ $stage != / ]] || { echo 'Refusing to stage into the host root directory' >&2; exit 2; }
 binary=$(realpath "$2")
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
