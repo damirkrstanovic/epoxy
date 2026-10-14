@@ -37,9 +37,10 @@ Tray popup dismissal and focus restoration belong to the tray host. In
 DankMaterialShell, version 1.6.2 starts an 80 ms timer after a leaf action that closes the popup
 and releases its layer-shell keyboard focus. Certificate actions and the two
 troubleshooting-log toggles do not request GTK presentation or window focus.
-Log settings intentionally opens the GTK control window. The user reports focus
-returning to the launch terminal; whether restoration follows the previously
-focused browser has not yet been verified. The standard
+Log settings intentionally opens the GTK control window. User testing confirmed
+that closing the tray menu returns focus to the previously active application,
+including browser or terminal. The terminal-specific focus issue is resolved as
+normal popup dismissal; keeping the host menu open is a separate behavior change. The standard
 tray menu protocol provides no keep-open control. See the
 [DMS tray implementation](https://github.com/AvengeMedia/DankMaterialShell/blob/v1.6.2/quickshell/Modules/DankBar/Widgets/SystemTrayBar.qml).
 

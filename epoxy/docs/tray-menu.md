@@ -25,7 +25,7 @@ The default mode checkbox and empty/PIN-only context rows are now removed from t
 tray. A selected certificate is already in use without an extra click. GTK labels
 and window lookup align with the tray; technical details remain optional.
 
-## Focus issue: findings and remaining check
+## Focus issue: resolved by user testing
 
 Installed dms-shell1.6.2-1 / quickshell0.3.2-1.1. Matching official v1.6.2 tray QML
 starts pendingActionCloseTimer after every leaf activation (including toggles),
@@ -36,11 +36,12 @@ Log settings deliberately opens GTK. ksni0.3.6 update_menu compares properties/
 children and emits no layout replacement for an unchanged menu; the one-second
 Epoxy update is not an unconditional menu rebuild.
 
-Source confirms dismissal/release, not the correctness of niri's restoration
-destination. User could not establish whether a previously focused browser also
-returns to the terminal. The specific focus issue remains open; no host edits,
-configuration changes, focus-stealing or reopen hacks were added. Other tray
-applications have not been compared live. Sources:
+Source established popup dismissal/release. Subsequent user testing confirmed
+that focus returns to whichever application was active, browser or terminal.
+The terminal-specific issue is closed as normal host popup behavior. No Epoxy
+focus fix, host edits, configuration changes or reopen hacks were required.
+Keeping the host menu open after an action would be a separate usability change.
+Other tray applications have not been compared live. Sources:
 https://github.com/AvengeMedia/DankMaterialShell/blob/v1.6.2/quickshell/Modules/DankBar/Widgets/SystemTrayBar.qml
 https://niri-wm.github.io/niri/IPC.html
 
