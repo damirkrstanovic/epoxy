@@ -19,8 +19,10 @@ SHA256SUMS. Checksums detect corruption; they are not publisher signatures.
 sudo pacman -U ./epoxy-signing-*.pkg.tar.zst
 # Fedora
 sudo dnf install ./epoxy-signing-*.x86_64.rpm
-# Debian / Ubuntu
-sudo apt install ./epoxy-signing_*_amd64.deb
+# Debian 13
+sudo apt install ./epoxy-signing_*_amd64-debian13.deb
+# Ubuntu 24.04
+sudo apt install ./epoxy-signing_*_amd64-ubuntu24.04.deb
 ```
 
 Open **Epoxy Signing** from the application menu. It starts in the tray when the
