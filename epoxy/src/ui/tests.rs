@@ -25,7 +25,7 @@ fn button(window: &gtk4::Window, name: &str) -> Button {
         .into_iter()
         .filter_map(|w| w.downcast::<Button>().ok())
         .find(|b| b.label().as_deref() == Some(name))
-        .unwrap()
+        .unwrap_or_else(|| panic!("missing button {name}"))
 }
 #[test]
 #[ignore = "requires isolated display and session bus; run with xvfb-run dbus-run-session"]
@@ -240,4 +240,125 @@ fn desktop_widgets_and_pin_lifecycle() {
     pump();
     assert!(no_tray.shutdown_requested().is_cancelled());
     controls.window.destroy();
+}
+#[test]
+#[ignore = "requires private Xvfb and D-Bus; synthetic certificates only"]
+fn certificate_widgets_show_details_dispatch_choices_and_dismiss_without_quitting() {
+    use crate::certificates::*;
+    gtk4::init().unwrap();
+    let app = Application::builder()
+        .application_id("dev.semyon.epoxy.CertificateTest")
+        .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    app.register(None::<&gtk4::gio::Cancellable>).unwrap();
+    let (catalog, mut rx) = CertificateController::new();
+    let view = super::certificates::CertificateWindow::new(&app, catalog.clone());
+    view.window.present();
+    pump();
+    assert!(
+        rx.try_recv().is_err(),
+        "opening a view must not probe or authenticate"
+    );
+    button(view.window.upcast_ref(), "Refresh certificates").emit_clicked();
+    assert!(matches!(rx.try_recv(), Ok(CertificateCommand::Refresh)));
+    let context = ContextKey {
+        module_name: "Synthetic".into(),
+        module_library: None,
+        token_uri: b"synthetic".to_vec(),
+    };
+    let mut cert = PublicCertificate::from_der(
+        context.clone(),
+        include_bytes!("../../tests/fixtures/eligible.der"),
+    )
+    .unwrap();
+    cert.holder = "<b>Željko_Čertificate</b> ".repeat(16);
+    let key = cert.key.clone();
+    catalog.publish(vec![PublicContext {
+        key: context,
+        label: "Synthetic Digital Signature PIN".repeat(4),
+        requires_authentication: false,
+        certificates: vec![cert],
+    }]);
+    view.refresh();
+    pump();
+    assert!(
+        descendants(view.window.upcast_ref())
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk4::Label>().ok())
+            .any(|l| l.text().contains("<b>Željko") && !l.uses_markup())
+    );
+    button(view.window.upcast_ref(), "Certificate details…").emit_clicked();
+    pump();
+    let details = app
+        .windows()
+        .into_iter()
+        .find(|w| w.title().as_deref() == Some("Certificate details"))
+        .unwrap();
+    button(&details, "Close").emit_clicked();
+    pump();
+    assert!(!details.is_visible());
+    button(view.window.upcast_ref(), "Certificate details…").emit_clicked();
+    pump();
+    let details = app
+        .windows()
+        .into_iter()
+        .find(|w| w.title().as_deref() == Some("Certificate details"))
+        .unwrap();
+    let escape_controller = details
+        .observe_controllers()
+        .item(0)
+        .unwrap()
+        .downcast::<gtk4::EventControllerKey>()
+        .unwrap();
+    escape_controller.emit_by_name::<bool>(
+        "key-pressed",
+        &[
+            &gtk4::gdk::Key::Escape,
+            &0u32,
+            &gtk4::gdk::ModifierType::empty(),
+        ],
+    );
+    pump();
+    assert!(!details.is_visible());
+    if let Ok(path) = std::env::var("EPOXY_CERT_UI_CAPTURE") {
+        assert!(
+            std::process::Command::new("import")
+                .args(["-window", "root", &path])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    button(view.window.upcast_ref(), "Use this certificate").emit_clicked();
+    match rx.try_recv().unwrap() {
+        CertificateCommand::Select {
+            key: k,
+            remember: true,
+            ..
+        } => assert!(k == key),
+        _ => panic!("remembered selection expected"),
+    }
+    catalog.finish(Ok(()));
+    view.refresh();
+    let guard = catalog.native_operation();
+    view.refresh();
+    assert!(!button(view.window.upcast_ref(), "Use this certificate").is_sensitive());
+    drop(guard);
+    view.refresh();
+    let advanced = descendants(view.window.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk4::Expander>().ok())
+        .unwrap();
+    advanced.set_expanded(true);
+    pump();
+    button(view.window.upcast_ref(), "Choose automatically").emit_clicked();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(CertificateCommand::Clear { forget_saved: true })
+    ));
+    button(view.window.upcast_ref(), "Close").emit_clicked();
+    pump();
+    assert!(!view.window.is_visible());
+    app.quit();
 }

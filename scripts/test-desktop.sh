@@ -17,6 +17,8 @@ export GDK_BACKEND=x11 GSK_RENDERER=cairo GTK_A11Y=none EPOXY_PRIVATE_TEST_BUS=1
 # No service directories: desktop portals/keyrings cannot autostart on this test bus.
 xvfb-run -a dbus-run-session --config-file "$fixture/bus.conf" -- \
   cargo test -p epoxy --lib ui::tests::desktop_widgets_and_pin_lifecycle -- --ignored --test-threads=1
+xvfb-run -a dbus-run-session --config-file "$fixture/bus.conf" -- \
+  cargo test -p epoxy --lib ui::tests::certificate_widgets -- --ignored --test-threads=1
 dbus-run-session --config-file "$fixture/bus.conf" -- \
   cargo test -p epoxy --lib desktop::tray::bus_tests::delayed_watcher -- --ignored --test-threads=1
 dbus-run-session --config-file "$fixture/bus.conf" -- \

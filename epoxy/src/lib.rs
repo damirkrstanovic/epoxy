@@ -8,3 +8,5 @@ pub mod xmlsec;
 pub mod diagnostics;
 
 pub mod desktop;
+
+pub mod certificates;

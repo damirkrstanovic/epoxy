@@ -12,3 +12,7 @@
 
 #include <xmlsec/nss/app.h>
 #include <xmlsec/nss/crypto.h>
+
+#include <xmlsec/nss/pkikeys.h>
+
+#include <nss/keyhi.h>

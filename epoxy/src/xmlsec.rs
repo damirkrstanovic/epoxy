@@ -161,6 +161,27 @@ impl<'a> XmlSigner<'a> {
         })
     }
 
+    pub fn matches_token(&self, token: &nss::Token<'_>) -> bool {
+        let data = unsafe { xmlSecKeyGetValue((*self.dsig_ptr).signKey) };
+        if data.is_null() {
+            return false;
+        }
+        // XMLSec returns a copied key, not a borrow (pkikeys.c); its slot accessor
+        // returns a separate NSS reference. Each reference has its own RAII owner.
+        struct PrivateKey(*mut SECKEYPrivateKey);
+        impl Drop for PrivateKey {
+            fn drop(&mut self) {
+                unsafe { SECKEY_DestroyPrivateKey(self.0) }
+            }
+        }
+        let ptr = unsafe { xmlSecNssPKIKeyDataGetPrivKey(data) };
+        if ptr.is_null() {
+            return false;
+        }
+        let key = PrivateKey(ptr);
+        token.matches_private_key(key.0)
+    }
+
     pub fn sign(&self, document: &mut Document) -> Result<(), SignError> {
         let sig_node = unsafe {
             xmlSecTmplSignatureCreate(

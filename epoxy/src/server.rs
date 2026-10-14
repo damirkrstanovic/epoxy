@@ -9,6 +9,9 @@ use std::{
 static NEXT_CORRELATION: AtomicU64 = AtomicU64::new(1);
 
 use anyhow::{Context, Error, Result, anyhow};
+use epoxy::certificates::{
+    CatalogModel, CertificateKey, ContextKey, Eligibility, PublicCertificate, SelectionError,
+};
 use futures::{SinkExt, StreamExt, TryStreamExt, future};
 use libxml::{
     parser::{Parser, ParserOptions, XmlParseError},
@@ -18,16 +21,27 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{info, warn};
 use tungstenite::{Message, Utf8Bytes};
-use x509_parser::prelude::{FromDer, X509Certificate};
 
 use crate::{
-    nss::{Nss, PinContext, PinInfo, PinPrompt, SecItem, TokenUri},
+    nss::{Nss, PinContext, PinInfo, PinPrompt, SecItem},
     proto::{
         requests::{self, Request},
         responses::{self, Response, ResultResponse, SuccessResponse},
     },
     xmlsec::{XmlSec, XmlSigner},
 };
+
+struct CertificateControlLog {
+    controller: epoxy::certificates::CertificateController,
+    operation: &'static str,
+    started: Instant,
+}
+impl Drop for CertificateControlLog {
+    fn drop(&mut self) {
+        let error = self.controller.snapshot().error;
+        info!(operation=self.operation,elapsed_ms=self.started.elapsed().as_millis() as u64,error_kind=?error,"certificate control completed");
+    }
+}
 
 impl TryFrom<Response> for Message {
     type Error = Error;
@@ -64,15 +78,23 @@ fn parse_request(text: &str) -> Result<Request> {
     })
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Session {
-    terminals: Vec<TokenUri>,
-    certs: Vec<(TokenUri, SecItem, String)>,
+    terminals: Vec<ContextKey>,
+    certs: std::collections::BTreeMap<usize, CertificateRecord>,
+    next_alias: usize,
+}
+struct CertificateRecord {
+    key: CertificateKey,
+    der: SecItem,
+    label: String,
+    revision: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub allow_soft_tokens: bool,
+    pub selection_path: std::path::PathBuf,
 }
 
 pub struct Server<F> {
@@ -80,18 +102,18 @@ pub struct Server<F> {
     diagnostics: Diagnostics,
     desktop: DesktopController,
     pin_prompt: Box<dyn PinPrompt>,
-    nss_xmlsec: LazyCell<(Nss, XmlSec), F>,
+    nss_xmlsec: LazyCell<Result<(Nss, XmlSec)>, F>,
     xml_parser: Parser,
 }
 
 impl<F> Server<F>
 where
-    F: FnOnce() -> (Nss, XmlSec),
+    F: FnOnce() -> Result<(Nss, XmlSec)>,
 {
     pub fn new(
         config: ServerConfig,
         pin_prompt: Box<dyn PinPrompt>,
-        nss_xmlsec: LazyCell<(Nss, XmlSec), F>,
+        nss_xmlsec: LazyCell<Result<(Nss, XmlSec)>, F>,
         diagnostics: Diagnostics,
         desktop: DesktopController,
     ) -> Server<F> {
@@ -102,6 +124,82 @@ where
             pin_prompt,
             nss_xmlsec,
             xml_parser: Parser::default(),
+        }
+    }
+
+    pub fn certificate_command(&self, command: epoxy::certificates::CertificateCommand) {
+        use epoxy::certificates::{CertificateCommand, native::public_catalog};
+        let controller = self.desktop.certificates();
+        let operation = match &command {
+            CertificateCommand::Refresh => "certificate_refresh",
+            CertificateCommand::Select { .. } => "certificate_select",
+            CertificateCommand::Clear { .. } => "certificate_clear",
+        };
+        let _log = CertificateControlLog {
+            controller: controller.clone(),
+            operation,
+            started: Instant::now(),
+        };
+        info!(operation, "certificate control received");
+        if self.desktop.shutdown_requested().is_cancelled() {
+            controller.close();
+            return;
+        }
+        let _busy = controller.native_operation();
+        if let CertificateCommand::Clear { forget_saved } = command {
+            let result = controller.clear_choice(
+                forget_saved,
+                &epoxy::certificates::PreferenceStore::new(self.config.selection_path.clone()),
+            );
+            controller.finish(result);
+            return;
+        }
+        let Ok((nss, _)) = &*self.nss_xmlsec else {
+            controller.unavailable();
+            return;
+        };
+        match command {
+            CertificateCommand::Refresh => match public_catalog(nss, self.config.allow_soft_tokens)
+            {
+                Ok(contexts) => controller.publish(contexts),
+                Err(_) => controller.unavailable(),
+            },
+            CertificateCommand::Select {
+                key,
+                remember,
+                generation,
+            } => {
+                let result = (|| {
+                    if controller.snapshot().generation != generation {
+                        return Err(SelectionError::Stale);
+                    }
+                    let contexts = public_catalog(nss, self.config.allow_soft_tokens)?;
+                    let model = CatalogModel::from_entries(
+                        contexts
+                            .iter()
+                            .flat_map(|c| c.certificates.clone())
+                            .collect(),
+                    );
+                    model.unique(&key)?;
+                    controller.publish_for_selection(contexts);
+                    controller.commit_choice(
+                        key,
+                        remember,
+                        &epoxy::certificates::PreferenceStore::new(
+                            self.config.selection_path.clone(),
+                        ),
+                    )?;
+                    Ok(())
+                })();
+                controller.finish(result);
+            }
+            CertificateCommand::Clear { forget_saved } => {
+                let result = controller.clear_choice(
+                    forget_saved,
+                    &epoxy::certificates::PreferenceStore::new(self.config.selection_path.clone()),
+                );
+                controller.finish(result);
+            }
         }
     }
 
@@ -225,6 +323,7 @@ where
                 }
                 _ => OperationKind::Information,
             };
+            let _native = self.desktop.certificates().native_operation();
             let operation = self.desktop.operation_started(context.get().0, kind);
             let response = {
                 let span = tracing::info_span!(
@@ -275,26 +374,43 @@ where
         &self,
         session: &mut Session,
     ) -> ResultResponse<responses::GetTerminals, responses::GetTerminalsErrorCode> {
-        let (ref nss, _) = *self.nss_xmlsec;
+        let Ok((nss, _)) = &*self.nss_xmlsec else {
+            return ResultResponse::error(responses::GetTerminalsErrorCode::GenericError);
+        };
+
+        match epoxy::certificates::native::public_catalog(nss, self.config.allow_soft_tokens) {
+            Ok(contexts) => self.desktop.certificates().publish(contexts),
+            Err(_) => {
+                self.desktop.certificates().unavailable();
+                return ResultResponse::error(responses::GetTerminalsErrorCode::GenericError);
+            }
+        }
 
         let tokens = nss.get_tokens();
         let Some(tokens) = tokens else {
             return ResultResponse::error(responses::GetTerminalsErrorCode::GenericError);
         };
 
-        let valid_tokens = tokens.iter().filter_map(|token| {
-            if (self.config.allow_soft_tokens || token.is_hw()) && !token.is_internal() {
-                Some((token.uri(), token.name()))
-            } else {
-                None
+        let selection = self.desktop.certificates().snapshot().selected;
+        let mut valid_tokens = Vec::new();
+        for token in tokens
+            .iter()
+            .filter(|t| (self.config.allow_soft_tokens || t.is_hw()) && !t.is_internal())
+        {
+            let Ok(context) = token.context_key() else {
+                continue;
+            };
+            if selection.as_ref().is_none_or(|s| s.context == context) {
+                valid_tokens.push((context, token.name()));
             }
-        });
-
+        }
+        if selection.is_some() && valid_tokens.len() != 1 {
+            valid_tokens.clear();
+        }
         session.terminals.clear();
         let mut terminals = Vec::new();
-
-        for (index, (uri, name)) in valid_tokens.enumerate() {
-            session.terminals.push(uri);
+        for (index, (key, name)) in valid_tokens.into_iter().enumerate() {
+            session.terminals.push(key);
             terminals.push(responses::Terminal { id: index, name });
         }
 
@@ -306,21 +422,42 @@ where
         session: &mut Session,
         request: requests::GetCertificates,
     ) -> ResultResponse<responses::GetCertificates, responses::GetCertificatesErrorCode> {
-        let (ref nss, _) = *self.nss_xmlsec;
-
-        let token_uri = session.terminals.get(request.terminal_id);
-        let Some(token_uri) = token_uri else {
+        let Ok((nss, _)) = &*self.nss_xmlsec else {
             return ResultResponse::error(responses::GetCertificatesErrorCode::GenericError);
         };
 
-        let token = nss.get_token(token_uri);
-        let Some(token) = token else {
+        session.certs.clear();
+        let snapshot = self.desktop.certificates().snapshot();
+        let context_key = session.terminals.get(request.terminal_id);
+        let Some(context_key) = context_key else {
+            return ResultResponse::error(responses::GetCertificatesErrorCode::GenericError);
+        };
+
+        if snapshot
+            .selected
+            .as_ref()
+            .is_some_and(|s| &s.context != context_key)
+        {
+            return ResultResponse::success(responses::GetCertificates {
+                certificates: vec![],
+            });
+        }
+        let Ok(token) = nss.find_context(context_key) else {
             return ResultResponse::error(responses::GetCertificatesErrorCode::GenericError);
         };
 
         // here PIN will be requested only if the token doesn't allow passwordless access to certs
         let pin_context = self.get_pin_context(None, String::from("List certificates"));
-        let Ok(certs) = nss.get_certs_in_token(&pin_context, &token) else {
+        let public = nss.list_certificates(&token);
+        let readable = public
+            .as_ref()
+            .is_some_and(|list| list.iter().next().is_some());
+        let listed = if readable {
+            Ok(public)
+        } else {
+            nss.get_certs_in_token(&pin_context, &token)
+        };
+        let Ok(certs) = listed else {
             warn!(
                 error_kind = "authentication_failed",
                 "token authentication failed"
@@ -331,39 +468,49 @@ where
             return ResultResponse::error(responses::GetCertificatesErrorCode::GenericError);
         };
 
-        let valid_certs = certs.iter().filter_map(|cert| {
-            let der = cert.der();
-
-            let (_, x509) = X509Certificate::from_der(der.as_ref()).ok()?;
-            let common_name = x509.subject().iter_common_name().next()?;
-            let label = common_name.as_str().ok()?.to_owned();
-
-            // keep only signing certs
-            let key_usage = x509.key_usage().ok()??.value;
-            if !(key_usage.digital_signature() && key_usage.non_repudiation()) {
-                return None;
+        let mut valid_certs = Vec::new();
+        for cert in certs.iter() {
+            let Ok(der) = cert.der() else {
+                continue;
+            };
+            let Ok(metadata) = PublicCertificate::from_der(context_key.clone(), der.as_ref())
+            else {
+                continue;
+            };
+            if metadata.eligibility != Eligibility::Eligible {
+                continue;
             }
-
-            if !x509.validity().is_valid() {
-                warn!(
-                    error_kind = "certificate_validity",
-                    "certificate is expired or not yet active"
-                );
-                return None;
+            if snapshot
+                .selected
+                .as_ref()
+                .is_none_or(|s| s == &metadata.key)
+            {
+                valid_certs.push((der, metadata));
             }
-
-            Some((der, label))
-        });
-
-        session.certs.clear();
+        }
+        if snapshot.selected.is_some() && valid_certs.len() != 1 {
+            valid_certs.clear();
+        }
         let mut certificates = Vec::new();
-
-        for (index, (der, label)) in valid_certs.enumerate() {
-            session.certs.push((token_uri.clone(), der, label.clone()));
+        for (der, metadata) in valid_certs {
+            let alias = session.next_alias;
+            let Some(next) = alias.checked_add(1) else {
+                return ResultResponse::error(responses::GetCertificatesErrorCode::GenericError);
+            };
+            session.next_alias = next;
             certificates.push(responses::Certificate {
-                alias: index,
-                name: label,
+                alias,
+                name: metadata.holder.clone(),
             });
+            session.certs.insert(
+                alias,
+                CertificateRecord {
+                    key: metadata.key,
+                    der,
+                    label: metadata.holder,
+                    revision: snapshot.revision,
+                },
+            );
         }
 
         ResultResponse::success(responses::GetCertificates { certificates })
@@ -377,16 +524,41 @@ where
         if self.desktop.shutdown_requested().is_cancelled() {
             return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
         }
-        let (ref nss, ref xmlsec) = *self.nss_xmlsec;
 
-        let cert = session.certs.get(request.certificate.alias);
-        let Some((token_uri, der, cert_label)) = cert else {
+        let Some(record) = session.certs.get(&request.certificate.alias) else {
             return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
         };
-
-        let Some(token) = nss.get_token(token_uri) else {
+        let snapshot = self.desktop.certificates().snapshot();
+        if snapshot
+            .authorize_alias(&record.key, record.revision)
+            .is_err()
+        {
+            warn!(
+                error_kind = "stale_certificate_selection",
+                "Reload or reselect certificates in the portal"
+            );
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        }
+        let Ok((nss, xmlsec)) = &*self.nss_xmlsec else {
             return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
         };
+        let Ok(token) = nss.find_context(&record.key.context) else {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        };
+        let Ok(identity) = token.identity() else {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        };
+        if identity.context != record.key.context {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        }
+        let Ok(metadata) =
+            PublicCertificate::from_der(identity.context.clone(), record.der.as_ref())
+        else {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        };
+        if metadata.key != record.key || metadata.eligibility != Eligibility::Eligible {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        }
 
         let Ok(mut document) = self.parse_xml(request.xml) else {
             return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
@@ -402,7 +574,7 @@ where
 
         info!("signature requested");
         {
-            let pin_context = self.get_pin_context(Some(cert_label.clone()), reason);
+            let pin_context = self.get_pin_context(Some(record.label.clone()), reason);
             let Ok(_logout_guard) = nss.authenticate(&pin_context, &token) else {
                 warn!(
                     error_kind = "authentication_failed",
@@ -411,11 +583,57 @@ where
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             };
 
-            let Ok(signer) = XmlSigner::with_cert(xmlsec, der) else {
+            let Ok(current) = token.identity() else {
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            };
+            if identity.ensure_unchanged(&current).is_err() {
+                warn!(
+                    error_kind = "token_replaced",
+                    "Card changed during authorization; reload certificates"
+                );
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            }
+            // Re-read from the selected live slot after authentication. A global
+            // certificate cache must not keep a removed/replaced card eligible.
+            let Some(live_certs) = nss.list_certificates(&token) else {
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            };
+            let live = CatalogModel::from_entries(
+                live_certs
+                    .iter()
+                    .filter_map(|c| {
+                        PublicCertificate::from_der(current.context.clone(), c.der().ok()?.as_ref())
+                            .ok()
+                    })
+                    .collect(),
+            );
+            if live.unique(&record.key).is_err() {
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            }
+
+            let Ok(signer) = XmlSigner::with_cert(xmlsec, &record.der) else {
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             };
 
+            if !signer.matches_token(&token) {
+                warn!(
+                    error_kind = "key_context_mismatch",
+                    "Signing key does not belong to the selected PIN context"
+                );
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            }
             if self.desktop.shutdown_requested().is_cancelled() {
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            }
+            if token
+                .identity()
+                .and_then(|now| identity.ensure_unchanged(&now))
+                .is_err()
+            {
+                warn!(
+                    error_kind = "token_replaced",
+                    "Card changed before signing; reload certificates"
+                );
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             }
             let Ok(()) = signer.sign(&mut document) else {
@@ -496,6 +714,130 @@ mod tests {
         }
     }
     #[test]
+    fn public_catalog_runs_on_native_thread_and_controls_remain_responsive() {
+        use epoxy::certificates::{
+            CatalogStatus, CertificateCommand, CertificateController, SelectionError,
+        };
+        let (catalog, mut rx) = CertificateController::new();
+        catalog.request_refresh().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker_catalog = catalog.clone();
+        let worker = std::thread::spawn(move || {
+            struct NoPin;
+            impl PinPrompt for NoPin {
+                fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                    panic!("public catalog must not prompt")
+                }
+            }
+            let native_thread = std::thread::current().id();
+            let (diagnostics, _subscriber) =
+                crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+            let desktop = DesktopController::with_certificates(diagnostics.clone(), worker_catalog);
+            let server = Server::new(
+                ServerConfig {
+                    allow_soft_tokens: false,
+                    selection_path: "/synthetic/unused/selection.json".into(),
+                },
+                Box::new(NoPin),
+                LazyCell::new(move || {
+                    started_tx.send(std::thread::current().id()).unwrap();
+                    release_rx.recv().unwrap();
+                    Err(anyhow!("synthetic unavailable backend"))
+                }),
+                diagnostics,
+                desktop,
+            );
+            assert!(matches!(rx.try_recv(), Ok(CertificateCommand::Refresh)));
+            server.certificate_command(CertificateCommand::Refresh);
+            native_thread
+        });
+        let executing_thread = started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(catalog.snapshot().status, CatalogStatus::Busy);
+        assert_eq!(catalog.request_clear(false), Err(SelectionError::Busy));
+        release_tx.send(()).unwrap();
+        assert_eq!(worker.join().unwrap(), executing_thread);
+        assert_eq!(catalog.snapshot().status, CatalogStatus::NativeUnavailable);
+    }
+    #[test]
+    fn changed_selection_rejects_a_real_session_alias_before_any_pin() {
+        struct NoPin;
+        impl PinPrompt for NoPin {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("stale alias must not prompt")
+            }
+        }
+        let (catalog, _) = epoxy::certificates::CertificateController::new();
+        let (diagnostics, _subscriber) =
+            crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+        let desktop = DesktopController::with_certificates(diagnostics.clone(), catalog.clone());
+        let server = Server::new(
+            ServerConfig {
+                allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
+            },
+            Box::new(NoPin),
+            LazyCell::new(|| panic!("stale alias must not initialize native libraries")),
+            diagnostics,
+            desktop,
+        );
+        let context = ContextKey {
+            module_name: "Synthetic module".into(),
+            module_library: None,
+            token_uri: b"synthetic:a".to_vec(),
+        };
+        let bytes = include_bytes!("../tests/fixtures/eligible.der").to_vec();
+        let key = PublicCertificate::from_der(context, &bytes).unwrap().key;
+        let mut session = Session::default();
+        session.certs.insert(
+            17,
+            CertificateRecord {
+                key: key.clone(),
+                der: SecItem::from_der_bytes(bytes).unwrap(),
+                label: "Synthetic".into(),
+                revision: 0,
+            },
+        );
+        catalog.commit_selection(Some(key), false);
+        let response = server.get_signed_xml(
+            &session,
+            requests::GetSignedXml {
+                certificate: requests::Certificate {
+                    alias: 17,
+                    name: "Synthetic".into(),
+                },
+                pin: String::new(),
+                xml: b"<synthetic/>".to_vec(),
+            },
+        );
+        assert!(matches!(response, ResultResponse::Error(_)));
+    }
+    #[test]
+    fn get_info_does_not_initialize_native_libraries() {
+        struct NoPin;
+        impl PinPrompt for NoPin {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("information does not prompt")
+            }
+        }
+        let (diagnostics, _subscriber) =
+            crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+        let desktop = DesktopController::new(diagnostics.clone());
+        let server = Server::new(
+            ServerConfig {
+                allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
+            },
+            Box::new(NoPin),
+            LazyCell::new(|| panic!("information does not initialize NSS")),
+            diagnostics,
+            desktop,
+        );
+        assert!(matches!(server.get_info(), ResultResponse::Success(_)));
+    }
+    #[test]
     fn shutdown_rejects_queued_signing_before_native_initialization() {
         struct NoPin;
         impl PinPrompt for NoPin {
@@ -509,6 +851,7 @@ mod tests {
         let server = Server::new(
             ServerConfig {
                 allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
             },
             Box::new(NoPin),
             LazyCell::new(|| panic!("cancelled work must not initialize NSS")),
@@ -585,7 +928,12 @@ mod tests {
             runtime.block_on(async {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
-            let server = Server::new(ServerConfig { allow_soft_tokens: false }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone(),DesktopController::new(diagnostics.clone()));
+            let (catalog,_)=epoxy::certificates::CertificateController::new();
+            let context=ContextKey{module_name:"synthetic-private-module".into(),module_library:None,token_uri:b"synthetic-private-context".to_vec()};
+            let certificate=PublicCertificate::from_der(context.clone(),include_bytes!("../tests/fixtures/eligible.der")).unwrap();
+            let chosen=certificate.key.clone();
+            catalog.publish(vec![epoxy::certificates::PublicContext{key:context,label:"synthetic-private-context".into(),requires_authentication:false,certificates:vec![certificate]}]);
+            let server = Server::new(ServerConfig { allow_soft_tokens: false, selection_path: "/synthetic/unused/selection.json".into() }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone(),DesktopController::with_certificates(diagnostics.clone(),catalog.clone()));
             let server_flow = async {
                 let (stream, _) = listener.accept().await.unwrap();
                 server.run(tokio_tungstenite::accept_async(stream).await.unwrap()).await.unwrap();
@@ -609,21 +957,68 @@ mod tests {
                 assert_eq!(response["payload"]["providers"][0]["name"], "NSS");
                 client.send(Message::text(input)).await.unwrap();
                 assert!(client.next().await.unwrap().is_ok());
+                server.certificate_command(epoxy::certificates::CertificateCommand::Clear{forget_saved:false});
+                catalog.commit_selection(Some(chosen.clone()),false);
+                client.send(Message::text(r#"{"operation":"GET_SIGNED_XML","input":{"certificate":{"alias":"0","name":"Synthetic Željko"},"pin":"synthetic-secret","xml":"PHNlY3JldC8+"}}"#)).await.unwrap();
+                let response=client.next().await.unwrap().unwrap();
+                let response:serde_json::Value=serde_json::from_str(response.to_text().unwrap()).unwrap();
+                assert_ne!(response["status"],0,"unlisted alias must fail before native initialization");
                 let traces = String::from_utf8_lossy(&capture.0.lock().unwrap()).matches("masked protocol trace").count();
-                assert_eq!(traces, 4);
+                assert_eq!(traces, 6);
                 diagnostics.disable().unwrap();
                 client.send(Message::text(input)).await.unwrap();
                 assert!(client.next().await.unwrap().is_ok());
                 let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
                 assert_eq!(output.matches("masked protocol trace").count(), traces);
-                for sensitive in ["synthetic-secret", "synthetic-host"] { assert!(!output.contains(sensitive)); }
+                for sensitive in ["synthetic-secret", "synthetic-host", "synthetic-private-module", "synthetic-private-context", "Synthetic Željko", "PHNlY3JldC8+"] { assert!(!output.contains(sensitive)); }
                 assert!(output.contains("correlation_id"));
                 assert!(output.contains("elapsed_ms"));
+                assert!(output.contains("certificate control completed"));
                 client.close(None).await.unwrap();
             };
             tokio::join!(server_flow, client_flow);
             assert_eq!(server.desktop.snapshot().connections,0);
         })
         });
+    }
+}
+
+#[cfg(test)]
+mod clear_without_native_tests {
+    use super::*;
+    #[test]
+    fn clearing_a_session_choice_does_not_require_an_available_native_backend() {
+        struct NoPin;
+        impl PinPrompt for NoPin {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("clear does not prompt")
+            }
+        }
+        let (catalog, _) = epoxy::certificates::CertificateController::new();
+        let key = CertificateKey {
+            context: ContextKey {
+                module_name: "Synthetic".into(),
+                module_library: None,
+                token_uri: b"synthetic".to_vec(),
+            },
+            der_sha256: [1; 32],
+        };
+        catalog.commit_selection(Some(key), false);
+        let (diagnostics, _) = crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+        let desktop = DesktopController::with_certificates(diagnostics.clone(), catalog.clone());
+        let server = Server::new(
+            ServerConfig {
+                allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
+            },
+            Box::new(NoPin),
+            LazyCell::new(|| panic!("clear must not initialize NSS")),
+            diagnostics,
+            desktop,
+        );
+        server.certificate_command(epoxy::certificates::CertificateCommand::Clear {
+            forget_saved: false,
+        });
+        assert!(catalog.snapshot().selected.is_none());
     }
 }

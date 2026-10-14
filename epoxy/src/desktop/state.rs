@@ -54,10 +54,24 @@ pub struct DesktopController {
     diagnostics: Diagnostics,
     shutdown: CancellationToken,
     stopped: CancellationToken,
+    certificates: crate::certificates::CertificateController,
 }
 impl DesktopController {
     pub fn new(diagnostics: Diagnostics) -> Self {
+        Self::with_certificates(
+            diagnostics,
+            crate::certificates::CertificateController::new().0,
+        )
+    }
+    pub fn certificates(&self) -> &crate::certificates::CertificateController {
+        &self.certificates
+    }
+    pub fn with_certificates(
+        diagnostics: Diagnostics,
+        certificates: crate::certificates::CertificateController,
+    ) -> Self {
         Self {
+            certificates,
             state: Arc::new(Mutex::new(State {
                 endpoint: None,
                 connections: 0,
