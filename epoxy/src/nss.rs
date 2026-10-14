@@ -152,6 +152,15 @@ impl Nss {
         found.ok_or(SelectionError::Missing)
     }
 
+    pub fn list_certificates<'a>(&'a self, token: &'a Token<'a>) -> Option<CertList<'a>> {
+        let ptr = unsafe { PK11_ListCertsInSlot(token.ptr) };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(CertList::from_raw(ptr))
+        }
+    }
+
     pub fn get_certs_in_token<'a>(
         &'a self,
         pin_context: &'a PinContext,
@@ -245,40 +254,37 @@ impl<'a> Drop for TokenLogoutGuard<'a> {
 #[error("token auth failed")]
 pub struct TokenAuthError(());
 
-#[derive(Debug)]
-pub struct SecItem(SECItem);
-
-impl Drop for SecItem {
-    fn drop(&mut self) {
-        unsafe { SECITEM_FreeItem(&mut self.0, PR_FALSE as i32) };
-    }
+pub struct SecItem {
+    item: SECItem,
+    bytes: Vec<u8>,
 }
-
-impl Clone for SecItem {
-    fn clone(&self) -> Self {
-        Self::new(&self.0)
-    }
-}
-
 impl AsRef<[u8]> for SecItem {
     fn as_ref(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.0.data, self.0.len as usize) }
+        &self.bytes
     }
 }
-
 impl SecItem {
-    fn new(value: &SECItem) -> SecItem {
-        let mut cloned = SECItem {
+    pub fn from_der_bytes(bytes: Vec<u8>) -> Result<Self, crate::certificates::SelectionError> {
+        if bytes.is_empty() || bytes.len() > 65536 {
+            return Err(crate::certificates::SelectionError::InvalidCertificate);
+        }
+        let item = SECItem {
             type_: SECItemType_siBuffer,
-            data: null_mut(),
-            len: 0,
+            data: bytes.as_ptr() as *mut u8,
+            len: bytes.len() as u32,
         };
-        unsafe { SECITEM_CopyItem(null_mut(), &mut cloned, value) };
-        SecItem(cloned)
+        Ok(Self { item, bytes })
     }
-
+    fn new(value: &SECItem) -> Result<Self, crate::certificates::SelectionError> {
+        if value.data.is_null() || value.len == 0 || value.len > 65536 {
+            return Err(crate::certificates::SelectionError::InvalidCertificate);
+        }
+        Self::from_der_bytes(
+            unsafe { slice::from_raw_parts(value.data, value.len as usize) }.to_vec(),
+        )
+    }
     pub fn as_ptr(&self) -> *const SECItem {
-        &self.0
+        &self.item
     }
 }
 
@@ -455,7 +461,7 @@ impl<'a> Cert<'a> {
         }
     }
 
-    pub fn der(&self) -> SecItem {
+    pub fn der(&self) -> Result<SecItem, crate::certificates::SelectionError> {
         SecItem::new(&unsafe { *self.ptr }.derCert)
     }
 }
@@ -542,5 +548,43 @@ mod tests {
     #[test]
     fn failed_initialization_never_constructs_a_null_native_context() {
         assert!(Nss::initialize("sql:/nonexistent/epoxy-synthetic-invalid-db".into()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires scripts/test-certificates-native.sh private synthetic NSS fixture"]
+    fn xmlsec_key_slot_is_checked_and_all_references_are_released() {
+        let db =
+            std::env::var("EPOXY_SYNTHETIC_NSS_DB").expect("private synthetic database required");
+        let der_path = std::env::var("EPOXY_SYNTHETIC_CERT_DER").expect("synthetic DER required");
+        let output =
+            std::env::var("EPOXY_SYNTHETIC_SIGNED_XML").expect("synthetic output required");
+        let nss = std::mem::ManuallyDrop::new(Nss::initialize(format!("sql:{db}")).unwrap());
+        {
+            let good = Token::from_raw(unsafe { PK11_GetInternalKeySlot() }, true);
+            let wrong = Token::from_raw(unsafe { PK11_GetInternalSlot() }, true);
+            assert!(!good.ptr.is_null() && !wrong.ptr.is_null() && good.ptr != wrong.ptr);
+            let xmlsec = crate::xmlsec::XmlSec::initialize().unwrap();
+            let der = SecItem::from_der_bytes(std::fs::read(der_path).unwrap()).unwrap();
+            let signer = crate::xmlsec::XmlSigner::with_cert(&xmlsec, &der).unwrap();
+            for _ in 0..100 {
+                assert!(signer.matches_token(&good));
+                assert!(!signer.matches_token(&wrong));
+            }
+            let mut doc = libxml::parser::Parser::default()
+                .parse_string("<synthetic>native fixture</synthetic>")
+                .unwrap();
+            signer.sign(&mut doc).unwrap();
+            std::fs::write(output, doc.to_string()).unwrap();
+        }
+        // NSS refuses shutdown with leaked references: this catches missing drops
+        // of the XMLSec key copy or PK11_GetSlotFromPrivateKey's referenced slot.
+        assert_eq!(
+            unsafe { NSS_ShutdownContext(nss.ptr) },
+            _SECStatus_SECSuccess
+        );
     }
 }

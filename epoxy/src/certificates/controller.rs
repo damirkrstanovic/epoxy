@@ -169,7 +169,7 @@ impl CertificateController {
         s.pending = false;
         s.error = Some(SelectionError::Unavailable);
     }
-    pub(crate) fn commit_selection(&self, key: Option<CertificateKey>, remembered: bool) {
+    pub fn commit_selection(&self, key: Option<CertificateKey>, remembered: bool) {
         let mut s = self.state.lock().unwrap();
         s.model.set_selection(key);
         s.remembered = remembered;
@@ -189,5 +189,23 @@ pub struct NativeOperation(CertificateController);
 impl Drop for NativeOperation {
     fn drop(&mut self) {
         self.0.state.lock().unwrap().busy = false;
+    }
+}
+
+impl CertificateSnapshot {
+    pub fn authorize_alias(
+        &self,
+        key: &CertificateKey,
+        revision: u64,
+    ) -> Result<(), SelectionError> {
+        if revision != self.revision {
+            return Err(SelectionError::Stale);
+        }
+        if let Some(selected) = &self.selected {
+            if selected != key {
+                return Err(SelectionError::Missing);
+            }
+        }
+        Ok(())
     }
 }

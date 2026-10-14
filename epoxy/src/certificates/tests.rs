@@ -107,3 +107,49 @@ fn der_metadata_preserves_unicode_and_rejects_ineligible_or_malformed_data() {
     trailing.push(0);
     assert!(PublicCertificate::from_der(context, &trailing).is_err());
 }
+#[test]
+fn stale_alias_or_other_module_context_fingerprint_never_authorizes_signing() {
+    let a = cert(b"a", 1);
+    let b = cert(b"b", 1);
+    let (controller, _) = CertificateController::new();
+    controller.commit_selection(Some(a.key.clone()), false);
+    let revision = controller.snapshot().revision;
+    let mut sign_count = 0;
+    let mut attempt = |snapshot: &CertificateSnapshot, key: &CertificateKey, rev: u64| {
+        if snapshot.authorize_alias(key, rev).is_ok() {
+            sign_count += 1;
+        }
+    };
+    attempt(&controller.snapshot(), &b.key, revision);
+    let mut other_module = a.key.clone();
+    other_module.context.module_library = Some("/other.so".into());
+    attempt(&controller.snapshot(), &other_module, revision);
+    let mut other_hash = a.key.clone();
+    other_hash.der_sha256 = [9; 32];
+    attempt(&controller.snapshot(), &other_hash, revision);
+    controller.commit_selection(Some(b.key.clone()), false);
+    attempt(&controller.snapshot(), &a.key, revision);
+    controller.commit_selection(None, false);
+    attempt(&controller.snapshot(), &a.key, revision);
+    assert_eq!(sign_count, 0);
+}
+#[test]
+fn missing_remembered_selection_never_falls_back_to_an_available_card() {
+    let a = cert(b"missing", 1);
+    let b = cert(b"available", 2);
+    let (controller, _) = CertificateController::new();
+    controller.commit_selection(Some(a.key.clone()), true);
+    controller.publish(vec![PublicContext {
+        key: b.key.context.clone(),
+        label: "Other card".into(),
+        requires_authentication: false,
+        certificates: vec![b.clone()],
+    }]);
+    assert_eq!(
+        controller
+            .snapshot()
+            .authorize_alias(&b.key, controller.snapshot().revision),
+        Err(SelectionError::Missing)
+    );
+    assert!(controller.snapshot().selected == Some(a.key));
+}
