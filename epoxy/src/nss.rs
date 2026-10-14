@@ -432,3 +432,41 @@ impl<'a> Iterator for CertListIter<'a> {
         Some(Cert::from_raw(unsafe { *item_ptr }.cert))
     }
 }
+
+#[cfg(test)]
+mod portability_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires scripts/test-native-portability.sh synthetic NSS database"]
+    fn synthetic_signing_releases_native_references() {
+        let db = std::env::var("EPOXY_SYNTHETIC_NSS_DB").unwrap();
+        let output = std::env::var("EPOXY_SYNTHETIC_SIGNED_XML").unwrap();
+        let nss = std::mem::ManuallyDrop::new(Nss::initialize(format!("sql:{db}")).unwrap());
+        assert!(!nss.ptr.is_null());
+        {
+            let mut bytes =
+                std::fs::read(std::env::var("EPOXY_SYNTHETIC_CERT_DER").unwrap()).unwrap();
+            let raw = SECItem {
+                type_: SECItemType_siBuffer,
+                data: bytes.as_mut_ptr(),
+                len: bytes.len().try_into().unwrap(),
+            };
+            let der = SecItem::new(&raw);
+            let xmlsec = crate::xmlsec::XmlSec::initialize().unwrap();
+            for _ in 0..10 {
+                let signer = crate::xmlsec::XmlSigner::with_cert(&xmlsec, &der).unwrap();
+                let mut doc = libxml::parser::Parser::default()
+                    .parse_string("<synthetic>native portability fixture</synthetic>")
+                    .unwrap();
+                signer.sign(&mut doc).unwrap();
+                std::fs::write(&output, doc.to_string()).unwrap();
+            }
+        }
+        // NSS refuses clean shutdown when native references are leaked.
+        assert_eq!(
+            unsafe { NSS_ShutdownContext(nss.ptr) },
+            _SECStatus_SECSuccess
+        );
+    }
+}

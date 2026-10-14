@@ -1,26 +1,36 @@
-use std::env;
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
 fn main() {
-    println!("cargo:rustc-link-search=native=/usr/lib");
-    println!("cargo:rustc-link-lib=nspr4");
-    println!("cargo:rustc-link-lib=nss3");
-    println!("cargo:rustc-link-lib=xml2");
-    println!("cargo:rustc-link-lib=xmlsec1");
-    println!("cargo:rustc-link-lib=xmlsec1-nss");
-
-    let bindings = bindgen::Builder::default()
+    // Use each distribution's headers and linker paths (including lib64 and
+    // Debian multiarch). These are the same flags used by native C consumers.
+    let xmlsec = pkg_config::Config::new()
+        .atleast_version("1.2.39")
+        .probe("xmlsec1-nss")
+        .expect("XMLSec NSS development files >= 1.2.39 are required");
+    let nss = pkg_config::Config::new()
+        .probe("nss")
+        .expect("NSS development files are required");
+    let mut builder = bindgen::Builder::default()
         .header("src/lib.h")
-        .clang_arg("-I/usr/include/nspr")
-        .clang_arg("-I/usr/include/nss")
-        .clang_arg("-I/usr/include/libxml2")
-        .clang_arg("-I/usr/include/xmlsec1")
         .blocklist_var("IPPORT_RESERVED")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        .wrap_unsafe_ops(true)
-        .generate()
-        .expect("Unable to generate bindings");
-
+        .wrap_unsafe_ops(true);
+    for library in [&xmlsec, &nss] {
+        for include in &library.include_paths {
+            builder = builder.clang_arg(format!("-I{}", include.display()));
+        }
+        for (name, value) in &library.defines {
+            // The wrapper header already selects the NSS backend.
+            if name == "XMLSEC_CRYPTO_NSS" {
+                continue;
+            }
+            builder = builder.clang_arg(match value {
+                Some(value) => format!("-D{name}={value}"),
+                None => format!("-D{name}"),
+            });
+        }
+    }
+    let bindings = builder.generate().expect("Unable to generate bindings");
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings
         .write_to_file(out_path.join("bindings.rs"))
