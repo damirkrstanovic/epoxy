@@ -66,10 +66,22 @@ for run in range(3):
                 def control(*args):
                     completed = subprocess.run([binary, 'diagnostics', *args], env=env, capture_output=True, text=True, timeout=3, check=True)
                     return json.loads(completed.stdout)
+                # Exercise the actual application's guard before its admitted protocol flow.
+                with socket.create_connection(address, timeout=2) as denied:
+                    key = base64.b64encode(os.urandom(16)).decode()
+                    denied.sendall(f'GET / HTTP/1.1\r\nHost: {address[0]}:{address[1]}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nOrigin: https://synthetic-origin-secret.evil.example\r\nSec-WebSocket-Key: {key}\r\n\r\n'.encode())
+                    data = b''
+                    while True:
+                        block = denied.recv(4096)
+                        if not block:
+                            break
+                        data += block
+                    assert data.startswith(b'HTTP/1.1 403'), data
+                    assert b'ON_OPEN_EVENT' not in data and b'synthetic-origin-secret' not in data
                 with socket.create_connection(address, timeout=2) as sock:
                     stream = sock.makefile('rb')
                     key = base64.b64encode(os.urandom(16)).decode()
-                    sock.sendall(f'GET / HTTP/1.1\r\nHost: {address[0]}:{address[1]}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n\r\n'.encode())
+                    sock.sendall(f'GET / HTTP/1.1\r\nHost: {address[0]}:{address[1]}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nOrigin: https://test.purs.gov.rs\r\nSec-WebSocket-Key: {key}\r\n\r\n'.encode())
                     assert b'101' in stream.readline()
                     while stream.readline() != b'\r\n':
                         pass
@@ -97,8 +109,9 @@ for run in range(3):
                 assert process.returncode == 0, logfile.read_text()
                 assert not (Path(directory) / 'epoxy/control.sock').exists()
                 contents = logfile.read_text()
-                for secret in ['synthetic-secret', 'synthetic-host', 'synthetic-pin']:
+                for secret in ['synthetic-secret', 'synthetic-host', 'synthetic-pin', 'synthetic-origin-secret']:
                     assert secret not in contents
+                assert 'origin_unapproved' in contents
                 assert 'NSS initialized' not in contents
                 scans = [line for line in contents.splitlines()
                          if 'certificate control received' in line and 'certificate_refresh' in line]

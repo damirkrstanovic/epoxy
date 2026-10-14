@@ -102,6 +102,7 @@ pub struct Server<F> {
     config: ServerConfig,
     diagnostics: Diagnostics,
     desktop: DesktopController,
+    network_deadlines: epoxy::browser::NetworkDeadlines,
     pin_prompt: Box<dyn PinPrompt>,
     nss_xmlsec: LazyCell<Result<(Nss, XmlSec)>, F>,
     xml_parser: Parser,
@@ -125,6 +126,7 @@ where
             pin_prompt,
             nss_xmlsec,
             xml_parser: Parser::default(),
+            network_deadlines: Default::default(),
         }
     }
 
@@ -234,17 +236,18 @@ where
         let request_diagnostics = self.diagnostics.clone();
         let mut rx = Box::pin(
             rx.try_take_while(|message| future::ok(!message.is_close()))
+                .try_filter(|message| future::ready(!message.is_ping() && !message.is_pong()))
                 .map_err(|_| anyhow!("WebSocket transport error"))
                 .and_then(move |message| {
                     let correlation_id = NEXT_CORRELATION.fetch_add(1, Ordering::Relaxed);
                     context.set((correlation_id, Instant::now()));
-                    let request = message
-                        .into_text()
-                        .map_err(|_| anyhow!("invalid WebSocket text message"))
-                        .and_then(|text| {
+                    let request = match message {
+                        Message::Text(text) => {
                             request_diagnostics.wire("request", &text, correlation_id);
                             parse_request(&text)
-                        });
+                        }
+                        _ => Err(anyhow!("invalid WebSocket text message")),
+                    };
                     match &request {
                         Ok(request) => info!(
                             correlation_id,
@@ -271,15 +274,32 @@ where
             .context("request handler failed")
     }
 
+    async fn send_response(
+        &self,
+        tx: &mut (impl SinkExt<Response, Error = Error> + Unpin),
+        response: Response,
+    ) -> Result<()> {
+        // The deadline starts after native work/PIN entry, not around the operation.
+        tokio::time::timeout(self.network_deadlines.response_write, tx.send(response))
+            .await
+            .context("response write timed out")??;
+        Ok(())
+    }
+
     async fn handshake(
         &self,
         mut tx: impl SinkExt<Response, Error = Error> + Unpin,
         mut rx: impl TryStreamExt<Ok = Request, Error = Error> + Unpin,
     ) -> Result<Session> {
         let on_open_event = SuccessResponse::new(responses::OnOpenEvent::with_mocked_info());
-        tx.send(Response::OnOpenEvent(on_open_event)).await?;
+        self.send_response(&mut tx, Response::OnOpenEvent(on_open_event))
+            .await?;
 
-        let Some(first_req) = rx.try_next().await? else {
+        let Some(first_req) =
+            tokio::time::timeout(self.network_deadlines.first_request, rx.try_next())
+                .await
+                .context("initial request timed out")??
+        else {
             return Err(anyhow!("connection closed before protocol handshake"));
         };
 
@@ -300,7 +320,7 @@ where
             .operation_started(0, OperationKind::Information);
         let response = Response::GetInfo(self.get_info());
         operation.complete(response.status());
-        tx.send(response).await?;
+        self.send_response(&mut tx, response).await?;
 
         Ok(Session {
             reported_site: reported_site(&get_info_req.host),
@@ -315,7 +335,11 @@ where
         mut session: Session,
         context: Rc<Cell<(u64, Instant)>>,
     ) -> Result<()> {
-        while let Some(request) = rx.try_next().await? {
+        while let Some(request) =
+            tokio::time::timeout(self.network_deadlines.request_idle, rx.try_next())
+                .await
+                .context("request idle timed out")??
+        {
             anyhow::ensure!(
                 !self.desktop.shutdown_requested().is_cancelled(),
                 "service shutting down"
@@ -351,8 +375,11 @@ where
                 }
             };
             operation.complete(response.status());
-            tx.send(response).await?;
+            self.send_response(&mut tx, response).await?;
         }
+        tokio::time::timeout(self.network_deadlines.response_write, tx.close())
+            .await
+            .context("response write timed out")??;
         Ok(())
     }
 
@@ -1109,5 +1136,155 @@ mod clear_without_native_tests {
             forget_saved: false,
         });
         assert!(catalog.snapshot().selected.is_none());
+    }
+}
+
+#[cfg(test)]
+mod network_deadline_tests {
+    use super::*;
+    use futures::{sink, stream};
+    fn server() -> Server<impl FnOnce() -> Result<(Nss, XmlSec)>> {
+        struct NoPin;
+        impl PinPrompt for NoPin {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("network test must not request a PIN")
+            }
+        }
+        let (diagnostics, _) = crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+        let desktop = DesktopController::new(diagnostics.clone());
+        Server::new(
+            ServerConfig {
+                allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
+            },
+            Box::new(NoPin),
+            LazyCell::new(|| panic!("network-only tests must not initialize NSS")),
+            diagnostics,
+            desktop,
+        )
+    }
+    #[tokio::test]
+    async fn missing_first_request_and_idle_client_expire_before_native_access() {
+        let mut server = server();
+        server.network_deadlines.first_request = std::time::Duration::from_millis(20);
+        server.network_deadlines.request_idle = std::time::Duration::from_millis(20);
+        let mut tx = sink::drain::<Response>().sink_map_err(|never| match never {});
+        let mut rx = stream::pending::<Result<Request>>();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            server.handshake(&mut tx, &mut rx),
+        )
+        .await
+        .expect("network deadline must fire")
+        .err()
+        .expect("deadline must reject client");
+        assert_eq!(error.to_string(), "initial request timed out");
+        let error = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            server.handle_requests(
+                tx,
+                rx,
+                Session::default(),
+                Rc::new(Cell::new((0, Instant::now()))),
+            ),
+        )
+        .await
+        .expect("idle deadline must fire")
+        .expect_err("deadline must reject client");
+        assert_eq!(error.to_string(), "request idle timed out");
+    }
+    #[tokio::test]
+    async fn stalled_response_writer_expires_before_waiting_for_get_info() {
+        let mut server = server();
+        server.network_deadlines.response_write = std::time::Duration::from_millis(20);
+        let tx = sink::unfold((), |(), _: Response| future::pending::<Result<()>>());
+        futures::pin_mut!(tx);
+        let mut rx = stream::pending::<Result<Request>>();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            server.handshake(&mut tx, &mut rx),
+        )
+        .await
+        .expect("network deadline must fire")
+        .err()
+        .expect("deadline must reject client");
+        assert_eq!(error.to_string(), "response write timed out");
+    }
+    #[tokio::test]
+    async fn admitted_protocol_keeps_ping_close_and_lazy_get_info_and_rejects_binary() {
+        use tungstenite::{
+            client::IntoClientRequest,
+            http::{HeaderValue, header::ORIGIN},
+        };
+        for binary in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut request = format!("ws://{}/", listener.local_addr().unwrap())
+                .into_client_request()
+                .unwrap();
+            request.headers_mut().insert(
+                ORIGIN,
+                HeaderValue::from_static(epoxy::browser::APPROVED_ORIGINS[0]),
+            );
+            let server = server();
+            let server_flow = async {
+                let (stream, _) = listener.accept().await.unwrap();
+                let socket = epoxy::browser::BrowserPolicy::default()
+                    .accept(stream)
+                    .await
+                    .unwrap();
+                let result = server.run(socket).await;
+                assert_eq!(result.is_err(), binary);
+            };
+            let client_flow = async {
+                let (mut client, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+                let opening = client.next().await.unwrap().unwrap();
+                assert!(opening.to_text().unwrap().contains("ON_OPEN_EVENT"));
+                client
+                    .send(Message::Ping(b"not-json".to_vec().into()))
+                    .await
+                    .unwrap();
+                client.send(Message::text(r#"{"operation":"GET_INFO","input":{"sbSession":"synthetic-session","host":"untrusted-claimed-site.example","language":"sr"}}"#)).await.unwrap();
+                let mut pong = false;
+                let mut info = false;
+                while !pong || !info {
+                    match tokio::time::timeout(std::time::Duration::from_secs(2), client.next())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .unwrap()
+                    {
+                        Message::Pong(_) => pong = true,
+                        Message::Text(text) => {
+                            let response: serde_json::Value = serde_json::from_str(&text).unwrap();
+                            assert_eq!(response["operation"], "GET_INFO");
+                            assert_eq!(response["status"], 0);
+                            info = true;
+                        }
+                        _ => panic!("unexpected protocol response"),
+                    }
+                }
+                if binary {
+                    client
+                        .send(Message::Binary(
+                            br#"{"operation":"GET_PROVIDERS"}"#.to_vec().into(),
+                        ))
+                        .await
+                        .unwrap();
+                    let closed =
+                        tokio::time::timeout(std::time::Duration::from_secs(2), client.next())
+                            .await
+                            .unwrap();
+                    assert!(!matches!(closed, Some(Ok(Message::Text(_)))));
+                } else {
+                    client.close(None).await.unwrap();
+                    let closed =
+                        tokio::time::timeout(std::time::Duration::from_secs(2), client.next())
+                            .await
+                            .unwrap();
+                    assert!(matches!(closed, Some(Ok(Message::Close(_)))));
+                }
+            };
+            tokio::join!(server_flow, client_flow);
+        }
     }
 }

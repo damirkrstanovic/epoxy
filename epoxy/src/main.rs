@@ -14,7 +14,6 @@ use tokio::{
 };
 use tokio_debouncer::{DebounceMode, Debouncer};
 use tokio_stream::wrappers::TcpListenerStream;
-use tokio_tungstenite::accept_async;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -97,11 +96,19 @@ async fn main() -> Result<()> {
         diagnostics.clone(),
         controller.clone(),
     ));
+    if config.allow_missing_origin {
+        warn!(
+            error_kind = "developer_origin_exception",
+            "Development mode admits Origin-less local clients; other browser origins remain restricted"
+        );
+    }
+    let browser_policy = epoxy::browser::BrowserPolicy::new(config.allow_missing_origin);
     let server_fut = serve(
         config.max_connections,
         config.max_idle_seconds,
         listener,
         server.clone(),
+        browser_policy,
     );
     let catalog_server = server.clone();
     drop(server);
@@ -164,20 +171,43 @@ fn get_fd_listener() -> Result<TcpListener> {
     use sd_notify::NotifyState;
     use std::os::fd::FromRawFd;
 
-    let fd = sd_notify::listen_fds()
-        .context("missing fds")?
-        .next()
-        .ok_or(anyhow!("missing fd"))?;
-
-    let listener = TcpListener::from_std(unsafe { std::net::TcpListener::from_raw_fd(fd) })
-        .context("failed to create listener from fd")?;
-
+    let mut fds = sd_notify::listen_fds().context("missing activation descriptors")?;
+    let fd = fds.next().ok_or(anyhow!("missing activation descriptor"))?;
+    anyhow::ensure!(
+        fds.next().is_none(),
+        "Expected exactly one activated listener"
+    );
+    // Own any socket descriptor first; validate it before converting to a TCP listener.
+    let socket = unsafe { socket2::Socket::from_raw_fd(fd) };
+    let listener = adopt_activated_socket(socket)?;
     let socket_addr = listener.local_addr().context("failed to get socket addr")?;
     info!("listening on {socket_addr} (fd {fd})");
 
     sd_notify::notify(true, &[NotifyState::Ready]).context("sd_notify failed")?;
 
     Ok(listener)
+}
+
+#[cfg(feature = "systemd")]
+fn adopt_activated_socket(socket: socket2::Socket) -> Result<TcpListener> {
+    anyhow::ensure!(
+        socket.r#type()? == socket2::Type::STREAM
+            && socket.is_listener()?
+            && socket.protocol()? == Some(socket2::Protocol::TCP),
+        "Activation descriptor must be a listening TCP socket"
+    );
+    let address = socket
+        .local_addr()?
+        .as_socket()
+        .context("Activation descriptor must be an IP listener")?;
+    anyhow::ensure!(
+        epoxy::browser::is_loopback(address.ip()),
+        "Inherited listener must be bound to loopback"
+    );
+    socket
+        .set_nonblocking(true)
+        .context("failed to configure activated listener")?;
+    TcpListener::from_std(socket.into()).context("failed to create activated TCP listener")
 }
 
 #[cfg(not(feature = "systemd"))]
@@ -190,9 +220,20 @@ fn get_fd_listener() -> Result<TcpListener> {
 }
 
 async fn get_sockaddr_listener(endpoint: &str) -> Result<TcpListener> {
-    let listener = TcpListener::bind(endpoint)
+    let addresses: Vec<_> = tokio::net::lookup_host(endpoint)
         .await
-        .context(format!("failed to listen on {}", endpoint))?;
+        .context("failed to resolve listener endpoint")?
+        .collect();
+    anyhow::ensure!(
+        !addresses.is_empty()
+            && addresses
+                .iter()
+                .all(|addr| epoxy::browser::is_loopback(addr.ip())),
+        "Listener endpoint must resolve only to loopback; use 127.0.0.1 or [::1]"
+    );
+    let listener = TcpListener::bind(addresses.as_slice())
+        .await
+        .context("failed to listen on loopback endpoint")?;
 
     let socket_addr = listener.local_addr().context("failed to get socket addr")?;
     info!("listening on {socket_addr}");
@@ -205,13 +246,14 @@ fn serve<'a, F>(
     max_idle_seconds: u32,
     listener: TcpListener,
     server: Rc<Server<F>>,
+    browser_policy: epoxy::browser::BrowserPolicy,
 ) -> LocalBoxFuture<'a, ()>
 where
     F: FnOnce() -> Result<(Nss, XmlSec)> + 'a,
 {
     if max_idle_seconds == 0 {
         return TcpListenerStream::new(listener)
-            .map(move |conn| handle_conn(server.clone(), conn))
+            .map(move |conn| handle_conn(server.clone(), conn, browser_policy))
             .buffer_unordered(max_connections as usize)
             .collect::<()>()
             .boxed_local();
@@ -226,7 +268,7 @@ where
             let idle_debouncer = idle_debouncer.clone();
             move |conn| {
                 idle_debouncer.clone().trigger();
-                handle_conn(server.clone(), conn)
+                handle_conn(server.clone(), conn, browser_policy)
             }
         })
         .buffer_unordered(max_connections as usize)
@@ -241,8 +283,11 @@ where
     .boxed_local()
 }
 
-async fn handle_conn<F>(server: Rc<Server<F>>, conn: Result<TcpStream, io::Error>)
-where
+async fn handle_conn<F>(
+    server: Rc<Server<F>>,
+    conn: Result<TcpStream, io::Error>,
+    browser_policy: epoxy::browser::BrowserPolicy,
+) where
     F: FnOnce() -> Result<(Nss, XmlSec)>,
 {
     let stream = match conn {
@@ -258,9 +303,12 @@ where
         return;
     };
 
-    let Ok(ws_stream) = accept_async(stream).await else {
-        warn!("failed to accept connection from {peer_addr}: WebSocket handshake error");
-        return;
+    let ws_stream = match browser_policy.accept(stream).await {
+        Ok(socket) => socket,
+        Err(error) => {
+            warn!(error_kind = error.kind(), "browser connection rejected");
+            return;
+        }
     };
 
     info!("connection accepted: {peer_addr}");
@@ -274,6 +322,43 @@ where
                 error_kind = "protocol_or_transport",
                 "connection terminated: {peer_addr}"
             )
+        }
+    }
+}
+
+#[cfg(test)]
+mod listener_tests {
+    use super::*;
+    #[cfg(feature = "systemd")]
+    #[tokio::test]
+    async fn activated_descriptor_must_be_listening_tcp_and_is_made_nonblocking() {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        assert!(adopt_activated_socket(udp.into()).is_err());
+        let unbound = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .unwrap();
+        assert!(adopt_activated_socket(unbound).is_err());
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = tcp.local_addr().unwrap();
+        let listener = adopt_activated_socket(tcp.into()).unwrap();
+        let connect = TcpStream::connect(address);
+        let accepted = listener.accept();
+        let (client, server) = tokio::join!(connect, accepted);
+        assert!(client.is_ok() && server.is_ok());
+    }
+    #[tokio::test]
+    async fn endpoint_validation_prevents_wildcard_and_accepts_loopback() {
+        for endpoint in ["0.0.0.0:0", "[::]:0", "192.0.2.1:0"] {
+            assert!(get_sockaddr_listener(endpoint).await.is_err());
+        }
+        for endpoint in ["127.0.0.1:0", "[::1]:0", "localhost:0"] {
+            let listener = get_sockaddr_listener(endpoint).await.unwrap();
+            assert!(epoxy::browser::is_loopback(
+                listener.local_addr().unwrap().ip()
+            ));
         }
     }
 }
