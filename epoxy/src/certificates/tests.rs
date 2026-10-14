@@ -1,0 +1,109 @@
+use super::*;
+fn cert(token: &[u8], hash: u8) -> PublicCertificate {
+    PublicCertificate {
+        key: CertificateKey {
+            context: ContextKey {
+                module_name: "synthetic module".into(),
+                module_library: Some("/synthetic/module.so".into()),
+                token_uri: token.to_vec(),
+            },
+            der_sha256: [hash; 32],
+        },
+        holder: "Same synthetic subject".into(),
+        issuer: "Synthetic CA".into(),
+        not_before: "2020".into(),
+        not_after: "2040".into(),
+        purpose: "Digital signature, content commitment".into(),
+        eligibility: Eligibility::Eligible,
+    }
+}
+#[test]
+fn selection_survives_reorder_but_duplicate_identity_is_ambiguous() {
+    let a = cert(b"token-a", 1);
+    let b = cert(b"token-b", 2);
+    let mut model = CatalogModel::from_entries(vec![a.clone(), b.clone()]);
+    model.select(&b.key, model.generation()).unwrap();
+    model.replace_entries(vec![b.clone(), a]);
+    assert!(model.selected_key() == Some(&b.key));
+    assert!(model.unique(&b.key).is_ok());
+    model.replace_entries(vec![b.clone(), b.clone()]);
+    assert_eq!(model.unique(&b.key).err(), Some(SelectionError::Ambiguous));
+}
+#[test]
+fn stale_and_ineligible_actions_cannot_change_selection() {
+    let a = cert(b"a", 1);
+    let mut b = cert(b"b", 2);
+    b.eligibility = Eligibility::Expired;
+    let mut model = CatalogModel::from_entries(vec![a.clone(), b.clone()]);
+    let old = model.generation();
+    model.replace_entries(vec![a.clone(), b.clone()]);
+    assert_eq!(model.select(&a.key, old), Err(SelectionError::Stale));
+    assert_eq!(
+        model.select(&b.key, model.generation()),
+        Err(SelectionError::Ineligible)
+    );
+    assert!(model.selected_key().is_none());
+    b.eligibility = Eligibility::Unsupported;
+    model.replace_entries(vec![a, b.clone()]);
+    assert_eq!(
+        model.select(&b.key, model.generation()),
+        Err(SelectionError::Ineligible)
+    );
+}
+#[test]
+fn bounded_refresh_coalesces_and_busy_selection_is_rejected() {
+    let (controller, mut rx) = CertificateController::new();
+    controller.request_refresh().unwrap();
+    controller.request_refresh().unwrap();
+    assert!(matches!(rx.try_recv(), Ok(CertificateCommand::Refresh)));
+    assert!(rx.try_recv().is_err());
+    controller.publish(vec![PublicContext {
+        key: cert(b"a", 1).key.context.clone(),
+        label: "Synthetic PIN context".into(),
+        requires_authentication: false,
+        certificates: vec![cert(b"a", 1)],
+    }]);
+    let guard = controller.native_operation();
+    assert_eq!(
+        controller.request_select(cert(b"a", 1).key, false, controller.snapshot().generation),
+        Err(SelectionError::Busy)
+    );
+    assert_eq!(controller.snapshot().status, CatalogStatus::Busy);
+    drop(guard);
+    assert_eq!(controller.snapshot().status, CatalogStatus::Ready);
+    controller.close();
+    assert_eq!(
+        controller.request_refresh(),
+        Err(SelectionError::Unavailable)
+    );
+}
+#[test]
+fn der_metadata_preserves_unicode_and_rejects_ineligible_or_malformed_data() {
+    let context = cert(b"a", 1).key.context;
+    for (der, eligible) in [
+        (
+            include_bytes!("../../tests/fixtures/eligible.der").as_slice(),
+            Eligibility::Eligible,
+        ),
+        (
+            include_bytes!("../../tests/fixtures/expired.der").as_slice(),
+            Eligibility::Expired,
+        ),
+        (
+            include_bytes!("../../tests/fixtures/unsupported.der").as_slice(),
+            Eligibility::Unsupported,
+        ),
+    ] {
+        let c = PublicCertificate::from_der(context.clone(), der).unwrap();
+        assert_eq!(c.holder, "Synthetic Željko");
+        assert_eq!(c.issuer, "CN=Synthetic CA");
+        assert_eq!(c.eligibility, eligible);
+    }
+    assert_eq!(
+        PublicCertificate::from_der(context.clone(), b"not DER").err(),
+        Some(SelectionError::InvalidCertificate)
+    );
+    let mut trailing = include_bytes!("../../tests/fixtures/eligible.der").to_vec();
+    trailing.push(0);
+    assert!(PublicCertificate::from_der(context, &trailing).is_err());
+}
