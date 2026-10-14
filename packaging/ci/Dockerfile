@@ -1,4 +1,4 @@
-ARG BASE_IMAGE
+ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE}
 COPY packaging/ci/bootstrap.sh /tmp/epoxy-bootstrap.sh
 RUN bash /tmp/epoxy-bootstrap.sh && rm /tmp/epoxy-bootstrap.sh

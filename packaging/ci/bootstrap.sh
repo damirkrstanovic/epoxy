@@ -9,7 +9,7 @@ case "$ID" in
         rm -rf /var/lib/apt/lists/*
         ;;
     fedora)
-        dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ make pkgconf-pkg-config clang-devel nss-devel nspr-devel libxml2-devel xmlsec1-devel xmlsec1-nss-devel libtool-ltdl-devel gtk4-devel nss-tools xmlsec1 xmlsec1-nss python3 python3-cryptography rpm-build desktop-file-utils opensc pcsc-lite ccid curl ca-certificates tar xz git
+        dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ make pkgconf-pkg-config clang-devel nss-devel nspr-devel libxml2-devel xmlsec1-devel xmlsec1-nss-devel libtool-ltdl-devel gtk4-devel nss-tools xmlsec1 xmlsec1-nss xmlsec1-openssl python3 python3-cryptography rpm-build desktop-file-utils opensc pcsc-lite ccid curl ca-certificates tar xz git
         dnf clean all
         ;;
     arch)

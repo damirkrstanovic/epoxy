@@ -24,3 +24,12 @@ override_dh_auto_clean:
 # User units are intentionally opt-in; never enable or restart user services.
 override_dh_installsystemduser:
 	dh_installsystemduser --no-enable --no-start
+
+# Generic debhelper cleanup removes *.orig files, including Cargo.toml.orig
+# covered by vendor checksums. Rust sources must remain byte-for-byte intact.
+override_dh_clean:
+	dh_clean --exclude=vendor/
+
+override_dh_update_autotools_config:
+
+override_dh_autoreconf:
