@@ -41,8 +41,9 @@ field name cannot escape masking. No unmasked mode exists.
 Malformed JSON logs omission metadata only. Input over 64 KiB, nesting deeper
 than 16, more than 128 visited JSON nodes, or sanitized output over 16 KiB is
 omitted rather than dumped. Raw input and parser error snippets are never the
-fallback. Wire logging happens before request decoding discards the browser
-PIN field; the PIN remains ignored for card authentication.
+fallback. Wire logging happens before request decoding and masks the browser PIN.
+A nonempty page PIN is now accepted only by that request's one-use authentication
+prompt; its credential wrapper also redacts Debug output. See [request PINs](request-pins.md).
 
 Operational error messages use fixed categories and, for NSS authentication
 failures, numeric native error/status codes. Native dialogs may display the

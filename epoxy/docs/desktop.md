@@ -48,7 +48,8 @@ tray loss does not repeatedly steal focus.
 
 ## PIN entry and shutdown
 
-PINs are entered in the compact native dialog. Purpose, certificate and token/PIN
+A nonempty PIN supplied by the page is used only for that request. Otherwise,
+PINs are entered in the native dialog. See [request PIN policy](request-pins.md). Purpose, certificate and token/PIN
 context labels wrap to accommodate long names. Enter or Continue submits; Escape,
 Cancel and the window close button cancel. The entry is cleared when dismissed.
 No PIN cache or convenience authenticated session is added. Diagnostic controls

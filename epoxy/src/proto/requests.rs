@@ -42,9 +42,8 @@ pub struct GetTerminals {
 #[serde(rename_all = "camelCase")]
 pub struct GetCertificates {
     pub terminal_id: usize,
-    #[allow(unused)]
-    #[serde(skip)]
-    pub pin: String,
+    #[serde(default)]
+    pub pin: epoxy::pin::RequestPin,
 }
 
 #[serde_as]
@@ -52,9 +51,8 @@ pub struct GetCertificates {
 #[serde(rename_all = "camelCase")]
 pub struct GetSignedXml {
     pub certificate: Certificate,
-    #[allow(unused)]
-    #[serde(skip)]
-    pub pin: String,
+    #[serde(default)]
+    pub pin: epoxy::pin::RequestPin,
     #[serde_as(as = "Base64<Standard, Unpadded>")]
     pub xml: Vec<u8>,
 }
