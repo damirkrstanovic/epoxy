@@ -123,6 +123,14 @@ where
             return;
         }
         let _busy = controller.native_operation();
+        if let CertificateCommand::Clear { forget_saved } = command {
+            let result = controller.clear_choice(
+                forget_saved,
+                &epoxy::certificates::PreferenceStore::new(self.config.selection_path.clone()),
+            );
+            controller.finish(result);
+            return;
+        }
         let Ok((nss, _)) = &*self.nss_xmlsec else {
             controller.unavailable();
             return;
@@ -896,5 +904,45 @@ mod tests {
             assert_eq!(server.desktop.snapshot().connections,0);
         })
         });
+    }
+}
+
+#[cfg(test)]
+mod clear_without_native_tests {
+    use super::*;
+    #[test]
+    fn clearing_a_session_choice_does_not_require_an_available_native_backend() {
+        struct NoPin;
+        impl PinPrompt for NoPin {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("clear does not prompt")
+            }
+        }
+        let (catalog, _) = epoxy::certificates::CertificateController::new();
+        let key = CertificateKey {
+            context: ContextKey {
+                module_name: "Synthetic".into(),
+                module_library: None,
+                token_uri: b"synthetic".to_vec(),
+            },
+            der_sha256: [1; 32],
+        };
+        catalog.commit_selection(Some(key), false);
+        let (diagnostics, _) = crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+        let desktop = DesktopController::with_certificates(diagnostics.clone(), catalog.clone());
+        let server = Server::new(
+            ServerConfig {
+                allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
+            },
+            Box::new(NoPin),
+            LazyCell::new(|| panic!("clear must not initialize NSS")),
+            diagnostics,
+            desktop,
+        );
+        server.certificate_command(epoxy::certificates::CertificateCommand::Clear {
+            forget_saved: false,
+        });
+        assert!(catalog.snapshot().selected.is_none());
     }
 }

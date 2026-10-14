@@ -1,3 +1,4 @@
+mod certificates;
 mod control_window;
 mod pin_dialog;
 mod prompt;

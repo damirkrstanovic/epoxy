@@ -172,3 +172,51 @@ impl CatalogModel {
         self.revision += 1;
     }
 }
+
+/// Plain, bounded display text. Never use certificate data as markup or access keys.
+pub fn display_text(text: &str, limit: usize) -> String {
+    let mut chars = text.chars();
+    let mut result = String::new();
+    for c in chars.by_ref().take(limit) {
+        result.push(if c.is_control() { ' ' } else { c });
+    }
+    if chars.next().is_some() {
+        result.push('…');
+    }
+    result
+}
+pub fn catalog_status_text(snapshot: &super::CertificateSnapshot) -> &'static str {
+    match snapshot.status {
+        super::CatalogStatus::NotLoaded => "Refresh to read public card certificates",
+        super::CatalogStatus::Loading => "Refreshing certificates or applying selection…",
+        super::CatalogStatus::Ready => "Public certificates loaded",
+        super::CatalogStatus::Busy => "Busy — wait for the current card/PIN operation",
+        super::CatalogStatus::NoCard => "No supported card detected; insert the card and refresh",
+        super::CatalogStatus::NativeUnavailable => {
+            "Certificate service unavailable; check NSS/OpenSC setup and restart Epoxy"
+        }
+    }
+}
+pub fn selection_status_text(snapshot: &super::CertificateSnapshot) -> &'static str {
+    let Some(selected) = &snapshot.selected else {
+        return "Using portal certificate selection";
+    };
+    let mut matches = snapshot
+        .contexts
+        .iter()
+        .flat_map(|c| &c.certificates)
+        .filter(|c| &c.key == selected);
+    let available = matches
+        .next()
+        .is_some_and(|c| c.eligibility == Eligibility::Eligible)
+        && matches.next().is_none();
+    if snapshot.status == super::CatalogStatus::NotLoaded {
+        "Certificate choice saved; refresh to check availability"
+    } else if !available {
+        "Selected certificate unavailable or ambiguous; refresh, choose another, or clear"
+    } else if snapshot.remembered {
+        "Selected for signing and remembered; PIN is never saved"
+    } else {
+        "Selected for this session; PIN is never saved"
+    }
+}

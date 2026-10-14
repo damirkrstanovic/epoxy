@@ -65,7 +65,7 @@ impl Tray for EpoxyTray {
     }
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let status = self.controller.diagnostics().status().ok();
-        vec![
+        let mut menu = vec![
             StandardItem {
                 label: status_label(self.controller.snapshot().activity).into(),
                 enabled: false,
@@ -118,7 +118,17 @@ impl Tray for EpoxyTray {
                 ..Default::default()
             }
             .into(),
-        ]
+        ];
+        menu.insert(
+            2,
+            ksni::menu::SubMenu {
+                label: "Cards and certificates".into(),
+                submenu: super::certificate_menu::build(self.controller.certificates()),
+                ..Default::default()
+            }
+            .into(),
+        );
+        menu
     }
 }
 fn status_label(activity: Activity) -> &'static str {
@@ -190,18 +200,18 @@ mod tests {
         };
         activate(&menu, 1, &mut tray);
         assert_eq!(rx.try_recv().unwrap(), ());
-        activate(&menu, 3, &mut tray);
+        activate(&menu, 4, &mut tray);
         let status = controller.diagnostics().status().unwrap();
         assert!(status.requests_masked);
         assert!(status.expires_in_seconds.unwrap() <= 300);
-        activate(&menu, 4, &mut tray);
+        activate(&menu, 5, &mut tray);
         assert_eq!(controller.diagnostics().status().unwrap().filter, "warn");
         controller
             .diagnostics()
             .enable(crate::diagnostics::Level::Debug, false, 1)
             .unwrap();
         let menu = tray.menu();
-        if let MenuItem::Standard(item) = &menu[4] {
+        if let MenuItem::Standard(item) = &menu[5] {
             assert!(item.enabled);
         }
         controller
@@ -209,10 +219,10 @@ mod tests {
             .expire(std::time::Instant::now() + std::time::Duration::from_secs(2))
             .unwrap();
         let menu = tray.menu();
-        if let MenuItem::Standard(item) = &menu[4] {
+        if let MenuItem::Standard(item) = &menu[5] {
             assert!(!item.enabled);
         }
-        activate(&menu, 6, &mut tray);
+        activate(&menu, 7, &mut tray);
         assert!(controller.shutdown_requested().is_cancelled());
     }
 }

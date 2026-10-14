@@ -44,6 +44,24 @@ impl ControlWindow {
         status.add_css_class("title-2");
         let endpoint = label("");
         let activity = label("");
+        let certificates = Button::with_label("Cards and certificates…");
+        certificates.connect_clicked({
+            let app = app.clone();
+            let catalog = controller.certificates().clone();
+            move |_| {
+                if let Some(window) = app
+                    .windows()
+                    .into_iter()
+                    .find(|w| w.title().as_deref() == Some("Cards and certificates"))
+                {
+                    window.present();
+                } else {
+                    super::certificates::CertificateWindow::new(&app, catalog.clone())
+                        .window
+                        .present();
+                }
+            }
+        });
         let heading = label("Diagnostics");
         heading.add_css_class("heading");
         let diagnostics = label("");
@@ -74,6 +92,7 @@ impl ControlWindow {
         for widget in [&status, &endpoint, &activity, &heading, &diagnostics] {
             content.append(widget);
         }
+        content.append(&certificates);
         content.append(&settings);
         content.append(&masked);
         content.append(&timing);
