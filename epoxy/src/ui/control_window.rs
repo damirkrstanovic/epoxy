@@ -64,8 +64,8 @@ impl ControlWindow {
         let timing = Box::new(Orientation::Horizontal, 12);
         timing.append(&label("Lifetime (seconds)"));
         timing.append(&lifetime);
-        let enable = Button::with_label("Enable diagnostics");
-        let disable = Button::with_label("Disable diagnostics");
+        let enable = Button::with_label("Enable troubleshooting logs");
+        let disable = Button::with_label("Disable troubleshooting logs");
         let actions = Box::new(Orientation::Horizontal, 12);
         actions.append(&enable);
         actions.append(&disable);

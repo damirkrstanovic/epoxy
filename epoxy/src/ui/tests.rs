@@ -131,7 +131,7 @@ fn desktop_widgets_and_pin_lifecycle() {
         }
         entry.set_text("synthetic-secret");
         // Diagnostic controls remain usable while a PIN is pending.
-        button(&control, "Enable diagnostics").emit_clicked();
+        button(&control, "Enable troubleshooting logs").emit_clicked();
         assert!(
             controller
                 .diagnostics()
@@ -140,7 +140,7 @@ fn desktop_widgets_and_pin_lifecycle() {
                 .expires_in_seconds
                 .is_some()
         );
-        button(&control, "Disable diagnostics").emit_clicked();
+        button(&control, "Disable troubleshooting logs").emit_clicked();
         assert!(
             controller
                 .diagnostics()
