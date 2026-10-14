@@ -18,6 +18,8 @@ pub trait PinPrompt {
 pub struct PinInfo {
     pub cert: Option<String>,
     pub reason: String,
+    /// Portal-reported display context; never authority for authentication.
+    pub reported_site: Option<String>,
 }
 
 pub struct PinContext<'a> {
@@ -90,7 +92,7 @@ impl Nss {
         }
         let token_name = Token::from_raw(token_ptr, false).name();
 
-        debug!("requesting native PIN entry");
+        debug!("requesting card authentication credential");
         let Some(pin) = pin_prompt.prompt_pin(pin_info, token_name) else {
             return null_mut();
         };

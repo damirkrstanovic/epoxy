@@ -80,6 +80,7 @@ fn parse_request(text: &str) -> Result<Request> {
 
 #[derive(Default)]
 pub struct Session {
+    reported_site: Option<String>,
     terminals: Vec<ContextKey>,
     certs: std::collections::BTreeMap<usize, CertificateRecord>,
     next_alias: usize,
@@ -301,7 +302,10 @@ where
         operation.complete(response.status());
         tx.send(response).await?;
 
-        Ok(Session::default())
+        Ok(Session {
+            reported_site: reported_site(&get_info_req.host),
+            ..Session::default()
+        })
     }
 
     async fn handle_requests(
@@ -447,7 +451,17 @@ where
         };
 
         // here PIN will be requested only if the token doesn't allow passwordless access to certs
-        let pin_context = self.get_pin_context(None, String::from("List certificates"));
+        let prompt = request
+            .pin
+            .into_prompt(&*self.pin_prompt, self.desktop.shutdown_requested());
+        let pin_context = PinContext::new(
+            &prompt,
+            PinInfo {
+                cert: None,
+                reason: String::from("List certificates"),
+                reported_site: session.reported_site.clone(),
+            },
+        );
         let public = nss.list_certificates(&token);
         let readable = public
             .as_ref()
@@ -574,7 +588,17 @@ where
 
         info!("signature requested");
         {
-            let pin_context = self.get_pin_context(Some(record.label.clone()), reason);
+            let prompt = request
+                .pin
+                .into_prompt(&*self.pin_prompt, self.desktop.shutdown_requested());
+            let pin_context = PinContext::new(
+                &prompt,
+                PinInfo {
+                    cert: Some(record.label.clone()),
+                    reason,
+                    reported_site: session.reported_site.clone(),
+                },
+            );
             let Ok(_logout_guard) = nss.authenticate(&pin_context, &token) else {
                 warn!(
                     error_kind = "authentication_failed",
@@ -649,11 +673,6 @@ where
         ResultResponse::success(responses::GetSignedXml { xml })
     }
 
-    fn get_pin_context(&'_ self, cert: Option<String>, reason: String) -> PinContext<'_> {
-        let pin_info = PinInfo { cert, reason };
-        PinContext::new(&*self.pin_prompt, pin_info)
-    }
-
     fn parse_xml(&self, xml: Vec<u8>) -> Result<Document, XmlParseError> {
         let opts = ParserOptions {
             recover: false,
@@ -661,6 +680,24 @@ where
         };
         self.xml_parser.parse_string_with_options(xml, opts)
     }
+}
+
+// GET_INFO host is a page claim, not an authenticated Origin. Bound and
+// validate it for display only; never use it to authorize a signing request.
+fn reported_site(host: &str) -> Option<String> {
+    if host.is_empty() || host.len() > 253 || !host.is_ascii() {
+        return None;
+    }
+    let valid = host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label.as_bytes()[0].is_ascii_alphanumeric()
+            && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+            && label
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    });
+    valid.then(|| host.to_ascii_lowercase())
 }
 
 enum EporeziFormKind {
@@ -762,6 +799,58 @@ mod tests {
         assert_eq!(catalog.snapshot().status, CatalogStatus::NativeUnavailable);
     }
     #[test]
+    fn reported_website_is_bounded_plain_hostname_metadata() {
+        assert_eq!(
+            reported_site("TEST.PURS.GOV.RS"),
+            Some("test.purs.gov.rs".into())
+        );
+        for invalid in [
+            "",
+            "<b>portal</b>",
+            "portal\n.example",
+            "portal/path",
+            "user@portal",
+            "-portal",
+            "portal..rs",
+        ] {
+            assert_eq!(reported_site(invalid), None);
+        }
+        assert_eq!(reported_site(&"a".repeat(254)), None);
+        assert_eq!(reported_site(&format!("{}.rs", "a".repeat(64))), None);
+    }
+    #[test]
+    fn page_pin_reaches_request_prompt_without_becoming_debug_output() {
+        struct NoNative;
+        impl PinPrompt for NoNative {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("supplied PIN must not open native prompt")
+            }
+        }
+        for input in [
+            r#"{"operation":"GET_CERTIFICATES","input":{"terminalId":0,"pin":"synthetic-page-pin"}}"#,
+            r#"{"operation":"GET_SIGNED_XML","input":{"certificate":{"alias":"0"},"pin":"synthetic-page-pin","xml":"PHRlc3QvPg"}}"#,
+        ] {
+            let request = parse_request(input).unwrap();
+            assert!(!format!("{request:?}").contains("synthetic-page-pin"));
+            let pin = match request {
+                Request::GetCertificates(r) => r.pin,
+                Request::GetSignedXml(r) => r.pin,
+                _ => panic!("unexpected operation"),
+            };
+            let prompt = pin.into_prompt(&NoNative, tokio_util::sync::CancellationToken::new());
+            let info = PinInfo {
+                cert: None,
+                reason: "Synthetic request".into(),
+                reported_site: None,
+            };
+            assert_eq!(
+                prompt.prompt_pin(&info, "token".into()),
+                Some("synthetic-page-pin".into())
+            );
+            assert_eq!(prompt.prompt_pin(&info, "token".into()), None);
+        }
+    }
+    #[test]
     fn changed_selection_rejects_a_real_session_alias_before_any_pin() {
         struct NoPin;
         impl PinPrompt for NoPin {
@@ -808,7 +897,7 @@ mod tests {
                     alias: 17,
                     name: "Synthetic".into(),
                 },
-                pin: String::new(),
+                pin: Default::default(),
                 xml: b"<synthetic/>".to_vec(),
             },
         );
@@ -866,7 +955,7 @@ mod tests {
                     alias: 0,
                     name: String::new(),
                 },
-                pin: String::new(),
+                pin: Default::default(),
                 xml: b"<synthetic/>".to_vec(),
             },
         );
