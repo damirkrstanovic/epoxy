@@ -1,6 +1,8 @@
 use super::{PinReply, prompt::PendingReply};
 use crate::nss::PinInfo;
-use gtk4::{Application, Box, Button, Label, Orientation, PasswordEntry, Window, glib, prelude::*};
+use gtk4::{
+    Application, Box, Button, Expander, Label, Orientation, PasswordEntry, Window, glib, prelude::*,
+};
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Clone)]
@@ -23,6 +25,16 @@ impl PinDialog {
         self.window.destroy();
     }
 }
+fn wrapped_label(text: &str) -> Label {
+    let label = Label::new(Some(text));
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+    label.set_max_width_chars(42);
+    label.set_lines(2);
+    label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    label.set_xalign(0.0);
+    label
+}
 pub(super) fn new_pin_popup(
     app: &Application,
     info: PinInfo,
@@ -38,25 +50,29 @@ pub(super) fn new_pin_popup(
             _ => content.set_margin_bottom(18),
         }
     }
-    for text in [
-        Some(info.reason),
-        info.cert,
-        Some(format!("Enter PIN for {token}")),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let label = Label::new(Some(&text));
-        label.set_wrap(true);
-        label.set_xalign(0.0);
-        content.append(&label);
-    }
+    let reason = wrapped_label(&crate::certificates::display_text(&info.reason, 160));
+    content.append(&reason);
+    let site = info.reported_site.as_deref().unwrap_or("not provided");
+    let website = wrapped_label(&format!("Website (reported by page): {site}"));
+    content.append(&website);
+    content.append(&wrapped_label("Card PIN"));
     let entry = PasswordEntry::builder()
         .show_peek_icon(false)
         .hexpand(true)
         .build();
     entry.update_property(&[gtk4::accessible::Property::Label("Card PIN")]);
     content.append(&entry);
+    let details = Box::new(Orientation::Vertical, 6);
+    for text in info.cert.into_iter().chain(std::iter::once(token)) {
+        let label = wrapped_label(&crate::certificates::display_text(&text, 160));
+        details.append(&label);
+    }
+    let details = Expander::builder()
+        .label("Certificate and card")
+        .child(&details)
+        .expanded(false)
+        .build();
+    content.append(&details);
     let buttons = Box::new(Orientation::Horizontal, 12);
     buttons.set_halign(gtk4::Align::End);
     let cancel = Button::with_label("Cancel");
@@ -68,8 +84,8 @@ pub(super) fn new_pin_popup(
     let window = Window::builder()
         .application(app)
         .title("Epoxy — Card PIN")
-        .default_width(420)
-        .resizable(true)
+        .default_width(360)
+        .resizable(false)
         .child(&content)
         .build();
     if let Some(parent) = app.active_window().filter(|parent| parent.is_visible()) {

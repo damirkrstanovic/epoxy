@@ -75,7 +75,9 @@ fn desktop_widgets_and_pin_lifecycle() {
     }
     pump();
     assert!(control.is_visible());
-    for action in ["close", "Cancel", "Enter", "Continue", "Escape", "shutdown"] {
+    for action in [
+        "close", "long", "Cancel", "Enter", "Continue", "Escape", "shutdown",
+    ] {
         let (tx, rx) = oneshot::channel();
         let worker = if action == "shutdown" {
             let prompt = UiPrompt {
@@ -87,6 +89,7 @@ fn desktop_widgets_and_pin_lifecycle() {
                     &PinInfo {
                         cert: None,
                         reason: "Synthetic signing".into(),
+                        reported_site: None,
                     },
                     "Synthetic token".into(),
                 );
@@ -97,7 +100,22 @@ fn desktop_widgets_and_pin_lifecycle() {
                 .try_send((
                     PinInfo {
                         cert: Some("Synthetic long certificate name Čertificate ".repeat(4)),
-                        reason: "Sign test declaration".into(),
+                        reason: if action == "long" {
+                            "UnbrokenPurpose".repeat(20)
+                        } else {
+                            "Sign test declaration".into()
+                        },
+                        reported_site: Some(if action == "long" {
+                            format!(
+                                "{}.{}.{}.{}",
+                                "a".repeat(63),
+                                "b".repeat(63),
+                                "c".repeat(63),
+                                "d".repeat(61)
+                            )
+                        } else {
+                            "test.purs.gov.rs".into()
+                        }),
                     },
                     "Synthetic Digital Signature PIN".into(),
                     tx,
@@ -116,6 +134,35 @@ fn desktop_widgets_and_pin_lifecycle() {
             .find_map(|w| w.downcast::<PasswordEntry>().ok())
             .unwrap();
         assert!(window.is_visible());
+        assert!(
+            !window.is_resizable(),
+            "PIN prompt must be a fixed-size floating-dialog candidate"
+        );
+        assert!(
+            window.width() <= 420,
+            "collapsed PIN dialog must stay compact"
+        );
+        assert!(
+            window.height() <= 400,
+            "collapsed PIN dialog must stay compact"
+        );
+        let details = descendants(window.upcast_ref())
+            .into_iter()
+            .find_map(|w| w.downcast::<gtk4::Expander>().ok())
+            .unwrap();
+        assert!(!details.is_expanded());
+        let labels: Vec<_> = descendants(window.upcast_ref())
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk4::Label>().ok())
+            .map(|l| l.text().to_string())
+            .collect();
+        if action != "shutdown" && action != "long" {
+            assert!(
+                labels
+                    .iter()
+                    .any(|l| l == "Website (reported by page): test.purs.gov.rs")
+            );
+        }
         let focused = gtk4::prelude::GtkWindowExt::focus(&window).unwrap();
         assert!(focused == entry.clone().upcast::<Widget>() || focused.is_ancestor(&entry));
         if action == "close"
@@ -150,7 +197,7 @@ fn desktop_widgets_and_pin_lifecycle() {
                 .is_none()
         );
         match action {
-            "close" => window.close(),
+            "close" | "long" => window.close(),
             "Cancel" => button(&window, "Cancel").emit_clicked(),
             "Enter" => entry.emit_by_name::<()>("activate", &[]),
             "Continue" => button(&window, "Continue").emit_clicked(),

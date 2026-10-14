@@ -80,6 +80,7 @@ fn parse_request(text: &str) -> Result<Request> {
 
 #[derive(Default)]
 pub struct Session {
+    reported_site: Option<String>,
     terminals: Vec<ContextKey>,
     certs: std::collections::BTreeMap<usize, CertificateRecord>,
     next_alias: usize,
@@ -301,7 +302,10 @@ where
         operation.complete(response.status());
         tx.send(response).await?;
 
-        Ok(Session::default())
+        Ok(Session {
+            reported_site: reported_site(&get_info_req.host),
+            ..Session::default()
+        })
     }
 
     async fn handle_requests(
@@ -455,6 +459,7 @@ where
             PinInfo {
                 cert: None,
                 reason: String::from("List certificates"),
+                reported_site: session.reported_site.clone(),
             },
         );
         let public = nss.list_certificates(&token);
@@ -591,6 +596,7 @@ where
                 PinInfo {
                     cert: Some(record.label.clone()),
                     reason,
+                    reported_site: session.reported_site.clone(),
                 },
             );
             let Ok(_logout_guard) = nss.authenticate(&pin_context, &token) else {
@@ -674,6 +680,24 @@ where
         };
         self.xml_parser.parse_string_with_options(xml, opts)
     }
+}
+
+// GET_INFO host is a page claim, not an authenticated Origin. Bound and
+// validate it for display only; never use it to authorize a signing request.
+fn reported_site(host: &str) -> Option<String> {
+    if host.is_empty() || host.len() > 253 || !host.is_ascii() {
+        return None;
+    }
+    let valid = host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label.as_bytes()[0].is_ascii_alphanumeric()
+            && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+            && label
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    });
+    valid.then(|| host.to_ascii_lowercase())
 }
 
 enum EporeziFormKind {
@@ -775,6 +799,26 @@ mod tests {
         assert_eq!(catalog.snapshot().status, CatalogStatus::NativeUnavailable);
     }
     #[test]
+    fn reported_website_is_bounded_plain_hostname_metadata() {
+        assert_eq!(
+            reported_site("TEST.PURS.GOV.RS"),
+            Some("test.purs.gov.rs".into())
+        );
+        for invalid in [
+            "",
+            "<b>portal</b>",
+            "portal\n.example",
+            "portal/path",
+            "user@portal",
+            "-portal",
+            "portal..rs",
+        ] {
+            assert_eq!(reported_site(invalid), None);
+        }
+        assert_eq!(reported_site(&"a".repeat(254)), None);
+        assert_eq!(reported_site(&format!("{}.rs", "a".repeat(64))), None);
+    }
+    #[test]
     fn page_pin_reaches_request_prompt_without_becoming_debug_output() {
         struct NoNative;
         impl PinPrompt for NoNative {
@@ -797,6 +841,7 @@ mod tests {
             let info = PinInfo {
                 cert: None,
                 reason: "Synthetic request".into(),
+                reported_site: None,
             };
             assert_eq!(
                 prompt.prompt_pin(&info, "token".into()),

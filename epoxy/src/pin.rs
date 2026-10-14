@@ -107,7 +107,8 @@ mod tests {
             prompt.prompt_pin(
                 &PinInfo {
                     cert: None,
-                    reason: "Synthetic".into()
+                    reason: "Synthetic".into(),
+                    reported_site: None,
                 },
                 "token".into()
             ),
@@ -121,6 +122,7 @@ mod tests {
         let info = PinInfo {
             cert: None,
             reason: "Synthetic signing".into(),
+            reported_site: None,
         };
         let pin: RequestPin = serde_json::from_str("\" page-secret \"").unwrap();
         assert!(!format!("{pin:?}").contains("page-secret"));

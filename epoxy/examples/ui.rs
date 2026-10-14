@@ -15,6 +15,7 @@ async fn main() -> Result<(), Error> {
     let pin_info = PinInfo {
         cert: Some("John Doe 012345678 Sign".into()),
         reason: "Sign form (unidentified)".into(),
+        reported_site: Some("example.invalid".into()),
     };
     let token_name = "My Token".into();
 
