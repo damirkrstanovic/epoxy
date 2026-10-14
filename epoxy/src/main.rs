@@ -36,6 +36,14 @@ async fn main() -> Result<()> {
         .context("failed to initialize diagnostics controls")?;
 
     let (certificates, mut certificate_rx) = epoxy::certificates::CertificateController::new();
+    let saved = epoxy::certificates::PreferenceStore::new(config.selection_path.clone().into())
+        .load()
+        .context(
+            "Certificate preference could not be loaded; inspect --selection-path before retrying",
+        )?;
+    if let Some(key) = saved {
+        certificates.commit_selection(Some(key), true);
+    }
     let controller =
         desktop::DesktopController::with_certificates(diagnostics.clone(), certificates.clone());
     let _lifetime = controller.service_lifetime();
@@ -80,6 +88,7 @@ async fn main() -> Result<()> {
 
     let server_config = ServerConfig {
         allow_soft_tokens: config.allow_soft_tokens,
+        selection_path: config.selection_path.into(),
     };
     let server = Rc::new(Server::new(
         server_config,

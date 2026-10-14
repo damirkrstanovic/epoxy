@@ -174,6 +174,42 @@ impl CertificateController {
         s.model.set_selection(key);
         s.remembered = remembered;
     }
+    /// Called by the serialized native dispatcher after publishing a fresh catalog.
+    /// A failed write must leave the previous selection and revision unchanged.
+    pub fn commit_choice(
+        &self,
+        key: CertificateKey,
+        remember: bool,
+        store: &PreferenceStore,
+    ) -> Result<(), SelectionError> {
+        let mut s = self.state.lock().unwrap();
+        if s.closed {
+            return Err(SelectionError::Unavailable);
+        }
+        s.model.unique(&key)?;
+        if remember {
+            store.save(&key)?;
+        }
+        s.model.set_selection(Some(key));
+        s.remembered = remember;
+        Ok(())
+    }
+    pub fn clear_choice(
+        &self,
+        forget_saved: bool,
+        store: &PreferenceStore,
+    ) -> Result<(), SelectionError> {
+        let mut s = self.state.lock().unwrap();
+        if s.closed {
+            return Err(SelectionError::Unavailable);
+        }
+        if forget_saved {
+            store.forget()?;
+        }
+        s.model.set_selection(None);
+        s.remembered = false;
+        Ok(())
+    }
     pub fn native_operation(&self) -> NativeOperation {
         self.state.lock().unwrap().busy = true;
         NativeOperation(self.clone())

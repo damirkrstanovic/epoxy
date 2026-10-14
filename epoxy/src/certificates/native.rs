@@ -41,7 +41,9 @@ pub fn public_catalog(
                     if entry.certificates.len() >= 128 {
                         return Err(SelectionError::Unavailable);
                     }
-                    let der = cert.der();
+                    let Ok(der) = cert.der() else {
+                        continue;
+                    };
                     if let Ok(metadata) = PublicCertificate::from_der(key.clone(), der.as_ref()) {
                         entry.certificates.push(metadata);
                     }

@@ -34,6 +34,7 @@ struct ConfigSlice {
     pub pin_prompt: Option<PinPromptKind>,
     pub allow_soft_tokens: Option<bool>,
     pub show_window: Option<bool>,
+    pub selection_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -46,6 +47,7 @@ pub struct Config {
     pub pin_prompt: PinPromptKind,
     pub allow_soft_tokens: bool,
     pub show_window: bool,
+    pub selection_path: String,
 }
 
 impl Default for Config {
@@ -59,6 +61,7 @@ impl Default for Config {
             pin_prompt: PinPromptKind::default(),
             allow_soft_tokens: false,
             show_window: false,
+            selection_path: default_selection_path(),
         }
     }
 }
@@ -74,6 +77,7 @@ impl Config {
             pin_prompt: slice.pin_prompt.unwrap_or(self.pin_prompt),
             allow_soft_tokens: slice.allow_soft_tokens.unwrap_or(self.allow_soft_tokens),
             show_window: slice.show_window.unwrap_or(self.show_window),
+            selection_path: slice.selection_path.unwrap_or(self.selection_path),
         }
     }
 }
@@ -84,6 +88,14 @@ fn default_nssdb_path() -> String {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string()
+}
+
+fn default_selection_path() -> String {
+    dirs::config_dir()
+        .unwrap_or_default()
+        .join("epoxy/certificate-selection.json")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn default_config_path() -> String {
@@ -114,6 +126,10 @@ pub struct ClapConfig {
     /// Path to an NSS database
     #[arg(short = 'd', long, default_value_t = Config::default().nssdb_path)]
     nssdb_path: String,
+
+    /// App-private file for an explicitly remembered certificate/context (never a PIN)
+    #[arg(long, default_value_t = default_selection_path())]
+    selection_path: String,
 
     /// Logging directives (see https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives)
     #[arg(short = 'l', long, default_value_t = Config::default().log)]
@@ -193,6 +209,7 @@ pub fn get_config() -> Result<Config, anyhow::Error> {
         pin_prompt: get_cli_value(&matches, "pin_prompt"),
         allow_soft_tokens: get_cli_value(&matches, "allow_soft_tokens"),
         show_window: get_cli_value(&matches, "show_window"),
+        selection_path: get_cli_value(&matches, "selection_path"),
     };
 
     let config = default_config.merge(toml_slice).merge(cli_slice);

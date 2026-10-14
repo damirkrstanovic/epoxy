@@ -1,5 +1,5 @@
 use super::*;
-fn cert(token: &[u8], hash: u8) -> PublicCertificate {
+pub(super) fn cert(token: &[u8], hash: u8) -> PublicCertificate {
     PublicCertificate {
         key: CertificateKey {
             context: ContextKey {

@@ -82,6 +82,7 @@ struct CertificateRecord {
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub allow_soft_tokens: bool,
+    pub selection_path: std::path::PathBuf,
 }
 
 pub struct Server<F> {
@@ -149,18 +150,24 @@ where
                             .collect(),
                     );
                     model.unique(&key)?;
-                    if remember {
-                        return Err(SelectionError::Preference);
-                    }
                     controller.publish(contexts);
-                    controller.commit_selection(Some(key), false);
+                    controller.commit_choice(
+                        key,
+                        remember,
+                        &epoxy::certificates::PreferenceStore::new(
+                            self.config.selection_path.clone(),
+                        ),
+                    )?;
                     Ok(())
                 })();
                 controller.finish(result);
             }
-            CertificateCommand::Clear { forget_saved: _ } => {
-                controller.commit_selection(None, false);
-                controller.finish(Ok(()));
+            CertificateCommand::Clear { forget_saved } => {
+                let result = controller.clear_choice(
+                    forget_saved,
+                    &epoxy::certificates::PreferenceStore::new(self.config.selection_path.clone()),
+                );
+                controller.finish(result);
             }
         }
     }
@@ -658,6 +665,7 @@ mod tests {
             let server = Server::new(
                 ServerConfig {
                     allow_soft_tokens: false,
+                    selection_path: "/synthetic/unused/selection.json".into(),
                 },
                 Box::new(NoPin),
                 LazyCell::new(move || {
@@ -696,6 +704,7 @@ mod tests {
         let server = Server::new(
             ServerConfig {
                 allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
             },
             Box::new(NoPin),
             LazyCell::new(|| panic!("stale alias must not initialize native libraries")),
@@ -747,6 +756,7 @@ mod tests {
         let server = Server::new(
             ServerConfig {
                 allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
             },
             Box::new(NoPin),
             LazyCell::new(|| panic!("information does not initialize NSS")),
@@ -769,6 +779,7 @@ mod tests {
         let server = Server::new(
             ServerConfig {
                 allow_soft_tokens: false,
+                selection_path: "/synthetic/unused/selection.json".into(),
             },
             Box::new(NoPin),
             LazyCell::new(|| panic!("cancelled work must not initialize NSS")),
