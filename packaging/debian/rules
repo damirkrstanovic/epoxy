@@ -22,9 +22,11 @@ override_dh_auto_install:
 override_dh_auto_clean:
 	rm -rf target
 
-# User units are intentionally opt-in; never enable or restart user services.
+# User units are opt-in. Compat 13 does not generate user-service restarts;
+# --no-enable suppresses activation on first install. Unlike the system-unit
+# helper, dh_installsystemduser does not accept --no-start.
 override_dh_installsystemduser:
-	dh_installsystemduser --no-enable --no-start
+	dh_installsystemduser --no-enable
 
 # Generic debhelper cleanup removes *.orig files, including Cargo.toml.orig
 # covered by vendor checksums. Rust sources must remain byte-for-byte intact.
