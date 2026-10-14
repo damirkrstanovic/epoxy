@@ -13,6 +13,9 @@ pub struct RequestPin(String);
 impl TryFrom<String> for RequestPin {
     type Error = &'static str;
     fn try_from(pin: String) -> Result<Self, Self::Error> {
+        if pin.len() > 1024 {
+            return Err("PIN exceeds request limit");
+        }
         if pin.contains('\0') {
             return Err("invalid PIN encoding");
         }
@@ -71,13 +74,22 @@ pub struct TtyPinPrompt;
 
 impl PinPrompt for TtyPinPrompt {
     fn prompt_pin(&self, pin_info: &PinInfo, token_name: String) -> Option<String> {
-        if let Some(cert) = &pin_info.cert {
-            print!("{}: ", cert);
-        }
-        println!("{}", pin_info.reason);
-        let prompt = format!("Enter PIN for {}: ", token_name);
-        rpassword::prompt_password(prompt).ok()
+        rpassword::prompt_password(tty_prompt_text(pin_info, &token_name)).ok()
     }
+}
+
+fn tty_prompt_text(info: &PinInfo, token: &str) -> String {
+    use crate::certificates::display_text;
+    let cert = info
+        .cert
+        .as_ref()
+        .map(|cert| format!("{}: ", display_text(cert, 160)))
+        .unwrap_or_default();
+    format!(
+        "{cert}{}\nEnter PIN for {}: ",
+        display_text(&info.reason, 160),
+        display_text(token, 160)
+    )
 }
 
 #[cfg(test)]
@@ -90,6 +102,28 @@ mod tests {
             self.0.set(self.0.get() + 1);
             Some("native-secret".into())
         }
+    }
+    #[test]
+    fn tty_prompt_does_not_interpret_untrusted_terminal_controls() {
+        let text = tty_prompt_text(
+            &PinInfo {
+                cert: Some("Signer\x1b[2J".into()),
+                reason: "Tax\r\nforged prompt\x07".into(),
+                reported_site: None,
+            },
+            "Token\x1b]52;c;secret\x07",
+        );
+        assert!(!text.contains('\x1b'));
+        assert!(!text.contains('\r'));
+        assert!(!text.contains('\x07'));
+        assert_eq!(text.matches('\n').count(), 1);
+        assert!(text.contains("Signer"));
+    }
+    #[test]
+    fn oversized_page_pin_is_rejected_without_echo() {
+        let error = RequestPin::try_from("s".repeat(1025)).unwrap_err();
+        assert!(!error.contains("ssss"));
+        assert!(RequestPin::try_from("s".repeat(1024)).is_ok());
     }
     #[test]
     fn embedded_null_pin_is_rejected_without_echoing_credentials() {
