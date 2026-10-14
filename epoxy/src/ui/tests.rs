@@ -1,0 +1,163 @@
+use super::*;
+use gtk4::{Button, PasswordEntry, Widget};
+use std::time::Duration;
+fn pump() {
+    let context = glib::MainContext::default();
+    let until = Instant::now() + Duration::from_millis(80);
+    while Instant::now() < until {
+        while context.pending() {
+            context.iteration(false);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+fn descendants(widget: &Widget) -> Vec<Widget> {
+    let mut result = vec![widget.clone()];
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        result.extend(descendants(&widget));
+        child = widget.next_sibling();
+    }
+    result
+}
+fn button(window: &gtk4::Window, name: &str) -> Button {
+    descendants(window.upcast_ref())
+        .into_iter()
+        .filter_map(|w| w.downcast::<Button>().ok())
+        .find(|b| b.label().as_deref() == Some(name))
+        .unwrap()
+}
+#[test]
+#[ignore = "requires isolated display and session bus; run with xvfb-run dbus-run-session"]
+fn desktop_widgets_and_pin_lifecycle() {
+    gtk4::init().unwrap();
+    let (diagnostics, _subscriber) = crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+    let controller = DesktopController::new(diagnostics);
+    controller.set_ready("127.0.0.1:17165".parse().unwrap());
+    controller.set_tray(TrayAvailability::Available);
+    let (pin_tx, pin_rx) = mpsc::channel(1);
+    let (show_tx, show_rx) = mpsc::channel(1);
+    let app = build_application(
+        pin_rx,
+        show_rx,
+        controller.clone(),
+        true,
+        CancellationToken::new(),
+    );
+    app.register(None::<&gtk4::gio::Cancellable>).unwrap();
+    app.activate();
+    pump();
+    let control = app
+        .windows()
+        .into_iter()
+        .find(|w| w.title().as_deref() == Some("Epoxy"))
+        .unwrap();
+    app.activate();
+    app.activate();
+    pump();
+    assert_eq!(app.windows().len(), 1);
+    control.close();
+    pump();
+    assert!(!control.is_visible());
+    assert!(!controller.shutdown_requested().is_cancelled());
+    let handle = UiHandle { show: show_tx };
+    for _ in 0..100 {
+        handle.show_window();
+    }
+    pump();
+    assert!(control.is_visible());
+    for action in ["close", "Cancel", "Enter", "Continue", "Escape", "shutdown"] {
+        let (tx, rx) = oneshot::channel();
+        pin_tx
+            .try_send((
+                PinInfo {
+                    cert: Some("Synthetic long certificate name Čertificate ".repeat(4)),
+                    reason: "Sign test declaration".into(),
+                },
+                "Synthetic Digital Signature PIN".into(),
+                tx,
+            ))
+            .unwrap();
+        pump();
+        let window = app
+            .windows()
+            .into_iter()
+            .find(|w| w.title().as_deref() == Some("Epoxy — Card PIN"))
+            .unwrap();
+        let entry = descendants(window.upcast_ref())
+            .into_iter()
+            .find_map(|w| w.downcast::<PasswordEntry>().ok())
+            .unwrap();
+        assert!(window.is_visible());
+        let focused = gtk4::prelude::GtkWindowExt::focus(&window).unwrap();
+        assert!(focused == entry.clone().upcast::<Widget>() || focused.is_ancestor(&entry));
+        entry.set_text("synthetic-secret");
+        // Diagnostic controls remain usable while a PIN is pending.
+        button(&control, "Enable diagnostics").emit_clicked();
+        assert!(
+            controller
+                .diagnostics()
+                .status()
+                .unwrap()
+                .expires_in_seconds
+                .is_some()
+        );
+        button(&control, "Disable diagnostics").emit_clicked();
+        assert!(
+            controller
+                .diagnostics()
+                .status()
+                .unwrap()
+                .expires_in_seconds
+                .is_none()
+        );
+        match action {
+            "close" => window.close(),
+            "Cancel" => button(&window, "Cancel").emit_clicked(),
+            "Enter" => entry.emit_by_name::<()>("activate", &[]),
+            "Continue" => button(&window, "Continue").emit_clicked(),
+            "Escape" => {
+                let controllers = window.observe_controllers();
+                let key = controllers
+                    .item(0)
+                    .unwrap()
+                    .downcast::<gtk4::EventControllerKey>()
+                    .unwrap();
+                key.emit_by_name::<bool>(
+                    "key-pressed",
+                    &[
+                        &gtk4::gdk::Key::Escape,
+                        &0u32,
+                        &gtk4::gdk::ModifierType::empty(),
+                    ],
+                );
+            }
+            _ => controller.request_quit(),
+        }
+        pump();
+        let expected = if action == "Enter" || action == "Continue" {
+            Some("synthetic-secret".into())
+        } else {
+            None
+        };
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(100)).unwrap(),
+            expected
+        );
+        assert!(entry.text().is_empty());
+        assert!(!format!("{:?}", controller.snapshot()).contains("synthetic-secret"));
+    }
+    controller.service_finished();
+    pump();
+    // Without a tray, closing the control window requests service shutdown.
+    let (diagnostics, _subscriber) = crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+    let no_tray = DesktopController::new(diagnostics);
+    no_tray.set_tray(TrayAvailability::Unavailable);
+    let controls = ControlWindow::new(&app, no_tray.clone());
+    controls.window.present();
+    pump();
+    controls.window.close();
+    pump();
+    assert!(no_tray.shutdown_requested().is_cancelled());
+    controls.window.destroy();
+}

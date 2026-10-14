@@ -1,5 +1,5 @@
 mod config;
-use epoxy::diagnostics;
+use epoxy::{desktop, diagnostics};
 mod nss;
 mod pin;
 mod proto;
