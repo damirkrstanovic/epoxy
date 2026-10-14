@@ -25,8 +25,14 @@ use crate::{
     xmlsec::XmlSec,
 };
 
+fn main() -> Result<()> {
+    epoxy::process_protection::enable()
+        .context("cannot disable process memory inspection and core dumps")?;
+    run()
+}
+
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+async fn run() -> Result<()> {
     let config = get_config()?;
 
     let diagnostics = init_tracing(&config.log).context("failed to initialize tracing")?;
