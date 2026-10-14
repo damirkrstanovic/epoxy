@@ -189,8 +189,8 @@ impl PinPrompt for mpsc::Sender<PinChannelMessage> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
         self.try_send((pin_info.clone(), token_name, reply_tx))
-            .map_err(|e| {
-                error!("failed to send PIN request to channel: {e}");
+            .map_err(|_| {
+                error!("PIN request channel unavailable");
             })
             .ok()?;
 

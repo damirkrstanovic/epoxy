@@ -98,7 +98,7 @@ pub struct GetInfo {
     pub certificate_id: Option<String>,
 }
 
-#[derive(Debug, Serialize_repr)]
+#[derive(Clone, Copy, Debug, Serialize_repr)]
 #[repr(u32)]
 pub enum GetInfoErrorCode {
     GenericError = 1100,
@@ -117,7 +117,7 @@ pub struct Provider {
     pub name: String,
 }
 
-#[derive(Debug, Serialize_repr)]
+#[derive(Clone, Copy, Debug, Serialize_repr)]
 #[repr(u32)]
 pub enum GetProvidersErrorCode {
     GenericError = 1200,
@@ -136,7 +136,7 @@ pub struct Terminal {
     pub name: String,
 }
 
-#[derive(Debug, Serialize_repr)]
+#[derive(Clone, Copy, Debug, Serialize_repr)]
 #[repr(u32)]
 pub enum GetTerminalsErrorCode {
     GenericError = 1300,
@@ -157,7 +157,7 @@ pub struct Certificate {
     pub name: String,
 }
 
-#[derive(Debug, Serialize_repr)]
+#[derive(Clone, Copy, Debug, Serialize_repr)]
 #[repr(u32)]
 pub enum GetCertificatesErrorCode {
     GenericError = 1400,
@@ -171,8 +171,67 @@ pub struct GetSignedXml {
     pub xml: Vec<u8>,
 }
 
-#[derive(Debug, Serialize_repr)]
+#[derive(Clone, Copy, Debug, Serialize_repr)]
 #[repr(u32)]
 pub enum GetSignedXmlErrorCode {
     GenericError = 1500,
+}
+
+impl Response {
+    pub fn operation(&self) -> &'static str {
+        match self {
+            Self::OnOpenEvent(_) => "ON_OPEN_EVENT",
+            Self::GetInfo(_) => "GET_INFO",
+            Self::GetProviders(_) => "GET_PROVIDERS",
+            Self::GetTerminals(_) => "GET_TERMINALS",
+            Self::GetCertificates(_) => "GET_CERTIFICATES",
+            Self::GetSignedXml(_) => "GET_SIGNED_XML",
+        }
+    }
+    pub fn status(&self) -> u32 {
+        fn code<T, S: Copy + Into<u32>>(result: &ResultResponse<T, S>) -> u32 {
+            match result {
+                ResultResponse::Success(success) => success.status,
+                ResultResponse::Error(error) => error.status.into(),
+            }
+        }
+        match self {
+            Self::OnOpenEvent(success) => success.status,
+            Self::GetInfo(result) => code(result),
+            Self::GetProviders(result) => code(result),
+            Self::GetTerminals(result) => code(result),
+            Self::GetCertificates(result) => code(result),
+            Self::GetSignedXml(result) => code(result),
+        }
+    }
+}
+
+impl From<GetInfoErrorCode> for u32 {
+    fn from(code: GetInfoErrorCode) -> Self {
+        code as u32
+    }
+}
+
+impl From<GetProvidersErrorCode> for u32 {
+    fn from(code: GetProvidersErrorCode) -> Self {
+        code as u32
+    }
+}
+
+impl From<GetTerminalsErrorCode> for u32 {
+    fn from(code: GetTerminalsErrorCode) -> Self {
+        code as u32
+    }
+}
+
+impl From<GetCertificatesErrorCode> for u32 {
+    fn from(code: GetCertificatesErrorCode) -> Self {
+        code as u32
+    }
+}
+
+impl From<GetSignedXmlErrorCode> for u32 {
+    fn from(code: GetSignedXmlErrorCode) -> Self {
+        code as u32
+    }
 }

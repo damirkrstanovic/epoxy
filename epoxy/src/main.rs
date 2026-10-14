@@ -1,4 +1,5 @@
 mod config;
+use epoxy::diagnostics;
 mod nss;
 mod pin;
 mod proto;
@@ -7,7 +8,7 @@ mod server;
 mod ui;
 mod xmlsec;
 
-use std::{cell::LazyCell, io, rc::Rc, str::FromStr, time::Duration};
+use std::{cell::LazyCell, io, rc::Rc, time::Duration};
 
 use anyhow::{Context, Result};
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
@@ -19,8 +20,7 @@ use tokio_debouncer::{DebounceMode, Debouncer};
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_tungstenite::accept_async;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace, warn};
-use tracing_subscriber::EnvFilter;
+use tracing::{debug, info, warn};
 
 use crate::{
     config::{PinPromptKind, get_config},
@@ -34,8 +34,10 @@ use crate::{
 async fn main() -> Result<()> {
     let config = get_config()?;
 
-    init_tracing(&config.log).context("failed to initialize tracing")?;
-    trace!("{:?}", config);
+    let diagnostics = init_tracing(&config.log).context("failed to initialize tracing")?;
+    let runtime = diagnostics::control::runtime_dir()?;
+    let _control = diagnostics::control::ControlServer::start(diagnostics.clone(), &runtime)
+        .context("failed to initialize diagnostics controls")?;
 
     let listener = get_listener(config.endpoint).await?;
 
@@ -53,7 +55,12 @@ async fn main() -> Result<()> {
     let server_config = ServerConfig {
         allow_soft_tokens: config.allow_soft_tokens,
     };
-    let server = Rc::new(Server::new(server_config, pin_prompt, nss_xmlsec));
+    let server = Rc::new(Server::new(
+        server_config,
+        pin_prompt,
+        nss_xmlsec,
+        diagnostics,
+    ));
     let server_fut = serve(
         config.max_connections,
         config.max_idle_seconds,
@@ -69,10 +76,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn init_tracing(log_spec: &str) -> Result<()> {
-    let env_filter = EnvFilter::from_str(log_spec).context("invalid log spec")?;
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    Ok(())
+fn init_tracing(log_spec: &str) -> Result<diagnostics::Diagnostics> {
+    let (diagnostics, subscriber) = diagnostics::subscriber(log_spec, io::stderr)?;
+    tracing::subscriber::set_global_default(subscriber)
+        .context("failed to install tracing subscriber")?;
+    Ok(diagnostics)
 }
 
 fn get_pin_method(pin_prompt: PinPromptKind, ct: CancellationToken) -> PinMethod {
@@ -142,7 +150,7 @@ fn serve<'a, F>(
     server: Rc<Server<F>>,
 ) -> LocalBoxFuture<'a, ()>
 where
-    F: FnOnce() -> (Nss, XmlSec) + 'a
+    F: FnOnce() -> (Nss, XmlSec) + 'a,
 {
     if max_idle_seconds == 0 {
         return TcpListenerStream::new(listener)
@@ -178,7 +186,7 @@ where
 
 async fn handle_conn<F>(server: Rc<Server<F>>, conn: Result<TcpStream, io::Error>)
 where
-    F: FnOnce() -> (Nss, XmlSec)
+    F: FnOnce() -> (Nss, XmlSec),
 {
     let stream = match conn {
         Ok(stream) => stream,
@@ -204,8 +212,11 @@ where
         Ok(()) => {
             info!("connection closed: {peer_addr}");
         }
-        Err(e) => {
-            warn!("connection terminated: {peer_addr} {e}")
+        Err(_) => {
+            warn!(
+                error_kind = "protocol_or_transport",
+                "connection terminated: {peer_addr}"
+            )
         }
     }
 }

@@ -107,3 +107,17 @@ For testing, use the [ePorezi test environment](https://test.purs.gov.rs). The O
 **DO NOT enter your PIN on the ePorezi login page**. As of 2026-02-14, PINs are being leaked to ePorezi servers.
 
 ![demo](assets/demo.gif)
+
+## Runtime diagnostics
+
+Operational logging omits credentials and certificate identity. Detailed masked
+request/response tracing is off by default and can be changed without restarting:
+
+```sh
+epoxy diagnostics enable --level debug --requests masked --ttl 300
+epoxy diagnostics status
+epoxy diagnostics disable
+```
+
+See [runtime diagnostics](epoxy/docs/diagnostics.md) for masking, expiry, the
+required private `XDG_RUNTIME_DIR`, and troubleshooting.

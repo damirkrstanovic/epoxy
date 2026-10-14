@@ -4,3 +4,5 @@ pub mod pin;
 #[cfg(feature = "ui-gtk")]
 pub mod ui;
 pub mod xmlsec;
+
+pub mod diagnostics;
