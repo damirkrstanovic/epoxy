@@ -27,6 +27,10 @@ type PinChannelMessage = (PinInfo, String, PinReply);
 pub struct UiHandle {
     show: mpsc::Sender<()>,
 }
+pub(crate) fn presentation_channel() -> (UiHandle, mpsc::Receiver<()>) {
+    let (show, rx) = mpsc::channel(1);
+    (UiHandle { show }, rx)
+}
 impl UiHandle {
     pub fn show_window(&self) {
         let _ = self.show.try_send(());
@@ -47,8 +51,7 @@ pub fn desktop_pin_method(
     ct: CancellationToken,
 ) -> (PinMethod, UiHandle) {
     let (pin_tx, pin_rx) = mpsc::channel(1);
-    let (show_tx, show_rx) = mpsc::channel(1);
-    let handle = UiHandle { show: show_tx };
+    let (handle, show_rx) = presentation_channel();
     let ui_controller = controller.clone();
     let future = tokio::task::spawn_blocking(move || {
         run_ui(pin_rx, show_rx, ui_controller, show_window, ct)

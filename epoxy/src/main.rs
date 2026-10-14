@@ -1,12 +1,8 @@
-mod config;
-use epoxy::{desktop, diagnostics};
-mod nss;
-mod pin;
+use epoxy::{config, desktop, diagnostics, nss, pin, xmlsec};
 mod proto;
 mod server;
 #[cfg(feature = "ui-gtk")]
-mod ui;
-mod xmlsec;
+use epoxy::ui;
 
 use std::{cell::LazyCell, io, rc::Rc, time::Duration};
 

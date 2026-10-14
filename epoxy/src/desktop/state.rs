@@ -138,7 +138,22 @@ impl DesktopController {
         &self.diagnostics
     }
     pub fn set_tray(&self, availability: TrayAvailability) {
-        self.state.lock().unwrap().tray = availability;
+        let changed = {
+            let mut state = self.state.lock().unwrap();
+            let changed = state.tray != availability;
+            state.tray = availability;
+            changed
+        };
+        if changed {
+            tracing::debug!(availability=?availability,"tray availability changed");
+        }
+    }
+    #[cfg(feature = "tray")]
+    pub(crate) fn confirm_tray(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state.tray == TrayAvailability::Pending {
+            state.tray = TrayAvailability::Available;
+        }
     }
 }
 pub struct ConnectionGuard(DesktopController);

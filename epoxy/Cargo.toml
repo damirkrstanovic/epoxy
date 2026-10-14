@@ -10,6 +10,8 @@ dirs = "6.0"
 futures = "0.3"
 gtk4 = { version = "0.10", optional = true }
 hex = "0.4"
+ksni = { version = "0.3", optional = true }
+zbus = { version = "5", default-features = false, features = ["tokio"], optional = true }
 libxml = "0.3"
 libc = "0.2"
 oneshot = { version = "0.1", optional = true }
@@ -34,10 +36,14 @@ x509-parser = "0.18"
 xmlsec-nss-sys = { path = "../xmlsec-nss-sys" }
 
 [features]
-default = ["systemd", "ui-gtk"]
+default = ["systemd", "tray"]
 systemd = ["dep:sd-notify"]
 ui-gtk = ["dep:gtk4", "dep:oneshot"]
+tray = ["ui-gtk", "dep:ksni", "dep:zbus"]
 
 [[example]]
 name = "ui"
 required-features = ["ui-gtk"]
+
+[dev-dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio"] }
