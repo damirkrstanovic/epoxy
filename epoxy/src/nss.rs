@@ -7,7 +7,7 @@ use std::{
 };
 
 use thiserror::Error;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use xmlsec_nss_sys::*;
 
 pub trait PinPrompt {
@@ -84,7 +84,7 @@ impl Nss {
 
         let token_name = Token::from_raw(token_ptr, false).name();
 
-        debug!("requesting PIN for {}", token_name);
+        debug!("requesting native PIN entry");
         let Some(pin) = pin_prompt.prompt_pin(pin_info, token_name) else {
             return null_mut();
         };
@@ -144,6 +144,14 @@ impl Nss {
         let pin_context_ptr = &raw const *pin_context as *mut c_void;
         let code = unsafe { PK11_Authenticate(token.ptr, PR_FALSE as i32, pin_context_ptr) };
         if code != _SECStatus_SECSuccess {
+            // NSS exposes a numeric, thread-local error; do not request its free-form text.
+            let native_error = unsafe { PORT_GetError() };
+            warn!(
+                operation = "PK11_Authenticate",
+                native_status = code,
+                native_error,
+                "token authentication failed"
+            );
             return Err(TokenAuthError(()));
         }
         Ok(TokenLogoutGuard::new(token))
@@ -158,6 +166,14 @@ impl Nss {
         if !token.is_friendly() {
             let code = unsafe { PK11_Authenticate(token.ptr, PR_FALSE as i32, pin_context_ptr) };
             if code != _SECStatus_SECSuccess {
+                // NSS exposes a numeric, thread-local error; do not request its free-form text.
+                let native_error = unsafe { PORT_GetError() };
+                warn!(
+                    operation = "PK11_Authenticate",
+                    native_status = code,
+                    native_error,
+                    "token authentication failed"
+                );
                 return Err(TokenAuthError(()));
             }
         }

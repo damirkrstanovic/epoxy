@@ -69,3 +69,15 @@ pub struct Certificate {
     #[serde(skip)]
     pub name: String,
 }
+
+impl Request {
+    pub fn operation(&self) -> &'static str {
+        match self {
+            Self::GetInfo(_) => "GET_INFO",
+            Self::GetProviders => "GET_PROVIDERS",
+            Self::GetTerminals(_) => "GET_TERMINALS",
+            Self::GetCertificates(_) => "GET_CERTIFICATES",
+            Self::GetSignedXml(_) => "GET_SIGNED_XML",
+        }
+    }
+}

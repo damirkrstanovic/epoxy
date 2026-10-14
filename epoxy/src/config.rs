@@ -94,6 +94,10 @@ fn default_config_path() -> String {
 #[derive(Clone, Debug, Parser, Serialize)]
 #[command(version, about)]
 pub struct ClapConfig {
+    #[serde(skip)]
+    #[command(subcommand)]
+    command: Option<crate::diagnostics::cli::AppCommand>,
+
     /// Path to an optional config file
     #[serde(skip)]
     #[arg(short = 'c', long, default_value_t = default_config_path())]
@@ -149,8 +153,16 @@ pub fn get_config() -> Result<Config, anyhow::Error> {
     let ClapConfig {
         config_path,
         print_config,
+        command,
         ..
     } = ClapConfig::parse();
+
+    if let Some(crate::diagnostics::cli::AppCommand::Diagnostics { command }) = command {
+        let runtime = crate::diagnostics::control::runtime_dir()?;
+        let status = crate::diagnostics::control::request(&runtime, &command)?;
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        process::exit(0);
+    }
 
     if print_config {
         println!("{}", toml::to_string_pretty(&default_config)?);
