@@ -41,7 +41,7 @@ fn desktop_widgets_and_pin_lifecycle() {
         pin_rx,
         show_rx,
         controller.clone(),
-        true,
+        false,
         CancellationToken::new(),
     );
     app.register(None::<&gtk4::gio::Cancellable>).unwrap();
@@ -52,6 +52,15 @@ fn desktop_widgets_and_pin_lifecycle() {
         .into_iter()
         .find(|w| w.title().as_deref() == Some("Epoxy"))
         .unwrap();
+    assert!(!control.is_visible());
+    let until = Instant::now() + Duration::from_millis(2200);
+    while Instant::now() < until {
+        pump();
+    }
+    assert!(
+        !control.is_visible(),
+        "a tray host must keep quiet startup from mapping a tiled window"
+    );
     app.activate();
     app.activate();
     pump();

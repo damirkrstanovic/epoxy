@@ -17,7 +17,10 @@ also enters the retry path, even when watcher ownership does not change.
 
 Tray activation opens one control window. Its menu provides service status, Open
 Epoxy, five minutes of masked diagnostics, Disable diagnostics and Quit. The tray
-contains no certificate identities, token labels, PINs or document data. A desktop
+contains no certificate identities, token labels, PINs or document data. Its embedded
+smart-card icon has a light surface and dark outline, supplied as 16/24/32/48 px
+ARGB pixmaps without a theme-dependent icon name. This avoids hosts displaying an
+unrecolored dark symbolic icon on a dark panel. A desktop
 must supply a StatusNotifierItem host to display it; Epoxy does not install or
 configure shell extensions or bars.
 
@@ -78,3 +81,25 @@ Epoxy, diagnostics toggles/expiry, status during PIN entry, cancellation, Quit a
 restart. Card/portal signing must be tested by the user entering the PIN themselves.
 Synthetic tests do not establish production portal acceptance or qualified-signature
 compliance.
+
+## Niri window placement
+
+A tray-only launch creates no visible tiled control window while its host is available.
+The control window opens through the tray or explicit `--show-window`; the native
+PIN prompt still appears when authentication requires it. Placement of these windows
+belongs to the compositor. To float Epoxy windows when they are actually opened,
+Niri supports this optional app-specific rule:
+
+```kdl
+window-rule {
+    match app-id=r#"^dev\.semyon\.epoxy$"#
+    open-floating true
+}
+```
+
+Check the app ID with `niri msg pick-window` if needed. Epoxy does not install or
+modify compositor rules automatically. See [Niri window rules](https://niri-wm.github.io/niri/Configuration%3A-Window-Rules.html).
+
+Icon source is `epoxy/assets/tray.svg`; committed ARGB buffers keep builds/runtime
+independent of SVG/image libraries. Regenerate only after an icon edit with
+`python3 scripts/generate-tray-icons.py` (development tools: rsvg-convert and Pillow).

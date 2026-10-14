@@ -18,29 +18,24 @@ impl Tray for EpoxyTray {
         "Epoxy".into()
     }
     fn icon_name(&self) -> String {
-        "security-high-symbolic".into()
+        // Some hosts render symbolic theme icons without recoloring them. Use
+        // our contrast-safe pixmaps directly rather than preferring a theme name.
+        String::new()
     }
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        // Embedded monochrome smart-card fallback, ARGB network byte order.
-        let mut data = vec![0; 24 * 24 * 4];
-        for y in 4..20 {
-            for x in 2..22 {
-                if x == 2
-                    || x == 21
-                    || y == 4
-                    || y == 19
-                    || ((6..12).contains(&x) && (8..15).contains(&y))
-                {
-                    data[(y * 24 + x) * 4..(y * 24 + x + 1) * 4]
-                        .copy_from_slice(&[255, 112, 112, 112]);
-                }
-            }
-        }
-        vec![ksni::Icon {
-            width: 24,
-            height: 24,
-            data,
-        }]
+        [
+            (16, include_bytes!("../../assets/tray-16.argb").as_slice()),
+            (24, include_bytes!("../../assets/tray-24.argb").as_slice()),
+            (32, include_bytes!("../../assets/tray-32.argb").as_slice()),
+            (48, include_bytes!("../../assets/tray-48.argb").as_slice()),
+        ]
+        .into_iter()
+        .map(|(size, data)| ksni::Icon {
+            width: size,
+            height: size,
+            data: data.to_vec(),
+        })
+        .collect()
     }
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
@@ -140,6 +135,42 @@ fn status_label(activity: Activity) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tray_icon_is_self_contained_and_visible_on_dark_and_light_panels() {
+        let (diagnostics, _subscriber) =
+            crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+        let (ui, _rx) = crate::ui::presentation_channel();
+        let tray = EpoxyTray {
+            controller: DesktopController::new(diagnostics),
+            ui,
+            registered: Arc::new(AtomicBool::new(true)),
+        };
+        // A host may prefer IconName and render symbolic SVG black without recoloring.
+        assert!(
+            tray.icon_name().is_empty(),
+            "use the supplied pixmaps without a theme-dependent name"
+        );
+        let icons = tray.icon_pixmap();
+        assert!(!icons.is_empty());
+        for icon in icons {
+            assert_eq!(icon.data.len(), (icon.width * icon.height * 4) as usize);
+            for background in [24u32, 245u32] {
+                let mut low = 255;
+                let mut high = 0;
+                for pixel in icon.data.chunks_exact(4) {
+                    let alpha = pixel[0] as u32;
+                    let foreground = (pixel[1] as u32 + pixel[2] as u32 + pixel[3] as u32) / 3;
+                    let brightness = (foreground * alpha + background * (255 - alpha)) / 255;
+                    low = low.min(brightness);
+                    high = high.max(brightness);
+                }
+                assert!(
+                    high - low >= 140,
+                    "icon needs a visible light surface and dark outline on either panel"
+                );
+            }
+        }
+    }
     #[test]
     fn tray_actions_control_existing_diagnostics_and_presentation() {
         let (diagnostics, _subscriber) =
@@ -296,6 +327,13 @@ mod bus_tests {
             .unwrap();
             let title: String = item.get_property("Title").await.unwrap();
             assert_eq!(title, "Epoxy");
+            let icon_name: String = item.get_property("IconName").await.unwrap();
+            assert!(icon_name.is_empty());
+            let pixmaps: Vec<(i32, i32, Vec<u8>)> = item.get_property("IconPixmap").await.unwrap();
+            assert!(!pixmaps.is_empty());
+            assert!(pixmaps.iter().all(|(w, h, bytes)| *w > 0
+                && *h > 0
+                && bytes.len() == (*w as usize) * (*h as usize) * 4));
             item.call::<_, _, ()>("Activate", &(0i32, 0i32))
                 .await
                 .unwrap();
