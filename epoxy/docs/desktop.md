@@ -16,8 +16,9 @@ Host changes are checked without cached properties; transient registration rejec
 also enters the retry path, even when watcher ownership does not change.
 
 Tray activation opens the host-rendered tray menu, without mapping a control
-window. Its menu provides service status, five minutes of masked diagnostics,
-Disable diagnostics and Quit. Advanced diagnostics opens the optional GTK window
+window. Its menu provides service status, “Enable troubleshooting logs (5 minutes)”,
+“Disable troubleshooting logs” and Quit. Troubleshooting request logs mask sensitive
+data and automatically return to normal logging after five minutes. Advanced diagnostics opens the optional GTK window
 only on explicit selection. The window has a visible Hide window button when a
 tray is available, plus keyboard/window-close dismissal; Quit is a separate action. The tray
 contains no certificate identities, token labels, PINs or document data. Its embedded

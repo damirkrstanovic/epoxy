@@ -80,7 +80,7 @@ impl Tray for EpoxyTray {
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Enable masked diagnostics for 5 minutes".into(),
+                label: "Enable troubleshooting logs (5 minutes)".into(),
                 activate: Box::new(|tray: &mut Self| {
                     if tray
                         .controller
@@ -98,7 +98,7 @@ impl Tray for EpoxyTray {
             }
             .into(),
             StandardItem {
-                label: "Disable diagnostics".into(),
+                label: "Disable troubleshooting logs".into(),
                 enabled: status.is_some_and(|s| s.expires_in_seconds.is_some()),
                 activate: Box::new(|tray: &mut Self| {
                     if tray.controller.diagnostics().disable().is_err() {
