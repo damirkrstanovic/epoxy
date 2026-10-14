@@ -77,15 +77,6 @@ impl Tray for EpoxyTray {
         advanced.extend(super::certificate_menu::advanced(
             self.controller.certificates(),
         ));
-        advanced.push(MenuItem::Separator);
-        advanced.push(
-            StandardItem {
-                label: "Quit Epoxy".into(),
-                activate: Box::new(|tray: &mut Self| tray.controller.request_quit()),
-                ..Default::default()
-            }
-            .into(),
-        );
         vec![
             StandardItem {
                 label: status_label(self.controller.snapshot().activity).into(),
@@ -134,6 +125,13 @@ impl Tray for EpoxyTray {
             ksni::menu::SubMenu {
                 label: "Advanced".into(),
                 submenu: advanced,
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
+            StandardItem {
+                label: "Quit Epoxy".into(),
+                activate: Box::new(|tray: &mut Self| tray.controller.request_quit()),
                 ..Default::default()
             }
             .into(),
@@ -223,7 +221,7 @@ mod tests {
         None
     }
     #[test]
-    fn tray_actions_keep_logs_at_top_and_windows_and_quit_in_advanced() {
+    fn tray_actions_keep_logs_and_quit_at_top_and_windows_in_advanced() {
         let (diagnostics, _subscriber) =
             crate::diagnostics::subscriber("warn", std::io::sink).unwrap();
         let controller = DesktopController::new(diagnostics);
@@ -249,7 +247,8 @@ mod tests {
                 "Cards and certificates",
                 "Enable troubleshooting logs (5 minutes)",
                 "Disable troubleshooting logs",
-                "Advanced"
+                "Advanced",
+                "Quit Epoxy"
             ]
         );
         (standard_action(&menu, "Enable troubleshooting logs (5 minutes)").activate)(&mut tray);

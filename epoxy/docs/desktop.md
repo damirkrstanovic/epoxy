@@ -18,8 +18,8 @@ also enters the retry path, even when watcher ownership does not change.
 Tray activation opens the host-rendered tray menu, without mapping a control
 window. The top-level order is service status, Cards and certificates,
 “Enable troubleshooting logs (5 minutes)”, “Disable troubleshooting logs”, then
-Advanced. Advanced contains diagnostics, the checked automatic certificate-selection
-mode, technical context details and Quit Epoxy. Troubleshooting request logs mask sensitive
+Advanced, then Quit Epoxy. Advanced contains diagnostics, the checked automatic
+certificate-selection mode and technical context details. Troubleshooting request logs mask sensitive
 data and automatically return to normal logging after five minutes. Advanced diagnostics opens the optional GTK window
 only on explicit selection. The window has a visible Hide window button when a
 tray is available, plus keyboard/window-close dismissal; Quit is a separate action. The tray
