@@ -4,7 +4,7 @@
 
 **Goal:** Add a useful native GTK control window and system tray while retaining the tested OpenSC signing path and making PIN dismissal and Quit reliable.
 
-**Architecture:** A shared, secret-free desktop controller exposes service activity, diagnostics and a shutdown request. GTK owns all widgets on its existing independent GUI thread. StatusNotifierItem runs on its own bounded-startup runtime/thread and sends presentation requests to GTK; neither waits behind the synchronous NSS/PIN callback. Preserve the current signing engine rather than introducing a backend actor in this feature.
+**Architecture:** A shared, secret-free desktop controller exposes service activity, diagnostics and a shutdown request. GTK owns all widgets on its existing independent GUI thread. StatusNotifierItem runs on its own runtime/thread with bounded connection attempts and sends presentation requests to GTK; neither waits behind the synchronous NSS/PIN callback. Preserve the current signing engine rather than introducing a backend actor in this feature.
 
 **Tech Stack:** Existing Rust, GTK4 0.10, Tokio, tracing and diagnostics controller; optional `ksni` 0.3 StatusNotifierItem implementation. GTK3/AppIndicator, Java, webviews and PIN caching are excluded.
 
@@ -13,10 +13,10 @@
 ## Global Constraints
 
 - Keep GTK and tray in the default desktop build; retain CLI-only and GTK-without-tray builds.
-- Service readiness must not wait for GTK or tray registration. Tray startup has a two-second deadline.
+- Service readiness must not wait for GTK or tray registration. Two seconds is a provisional UI fallback threshold, not a permanent tray-registration deadline: show the control window once if no tray host is available, then continue background recovery until shutdown.
 - GTK and tray diagnostics reuse the existing controller, including mandatory masking and automatic expiry; tracing remains off by default.
 - No PIN caching or convenience authenticated-session retention. No actual PIN/identity/document data enters desktop status, logs, tooltips or notifications.
-- Selected certificate and PIN-context labels may appear in the native PIN dialog only. The status window and tray show service/operation state, not personal identities.
+- For this desktop-controls PR, selected certificate and PIN-context labels appear in the native PIN dialog; the status window and tray show service/operation state. The separate context-selection feature may add an explicit read-only identity/details view in the local GTK window, outside the secret-free status model. Personal identities never enter tray tooltips, notifications or routine logs. Full certificate/key management remains outside Epoxy.
 - Closing a PIN window or pressing Escape/Cancel resolves its reply exactly once as cancellation. Quit cancels pending PIN entry and stops new signing work.
 - A native signature already executing cannot be undone or safely interrupted by this UI; keep the UI responsive with a Stopping state until native execution/cleanup returns.
 - Preserve wire operations/statuses, cryptographic algorithms, NSS module/database selection, and operation-scoped authentication/logout.
@@ -130,8 +130,8 @@ Also test successful submit versus later close, channel closure, shutdown cancel
 
 - [ ] Test menu behavior/model first: Open requests GTK presentation; Enable delegates `Level::Debug, masked=true, ttl=300`; Disable restores diagnostics baseline; Quit signals shutdown. Include diagnostics enabled with requests off, expiry, GTK absence and privacy of title/tooltip/status. Use the pure typed menu model for behavioral assertions, not tests that merely mirror label construction. Verify that changing service state updates status rather than reconstructing multiple tray instances.
 - [ ] Run tests red, then implement ksni Tray with a stable app ID, standard themed icon plus fallback pixmap, left activation and the menu. Use `ksni = { version = "0.3", optional = true }`; do not change GTK4's version or introduce GTK3.
-- [ ] Run tray startup outside the service runtime with a two-second bound. ksni's `assume_sni_available(true)` permits late watcher registration; its `watcher_offline` implementation records absence and returns true to keep monitoring. `watcher_online` records availability. A spawn handle alone is not proof that a watcher displayed the tray: preserve any offline state established during startup. D-Bus connection/startup failure records Unavailable and presents the GTK fallback once. No unbounded retries or repeated focus stealing.
-- [ ] Add isolated D-Bus tests with a synthetic StatusNotifierWatcher for registration, menu callbacks, disappearance/reappearance and missing watcher. Test startup timeout separately with a controlled nonresponding watcher/service. Never register test trays on the user's active desktop bus during automated tests.
+- [ ] Run tray startup outside the service runtime. After two seconds without confirmed tray availability, present the GTK fallback once; do not permanently abandon registration. ksni's `assume_sni_available(true)` permits late watcher registration; its `watcher_offline` implementation records absence and returns true to keep monitoring. `watcher_online` records availability. A spawn handle alone is not proof that a watcher displayed the tray: preserve any offline state established during startup. D-Bus connection/startup failure records Unavailable. Bound individual connection attempts, clean up cancelled attempts, and retry failures with cancellable backoff capped at 30 seconds until shutdown. Missing watcher monitoring does not require repeatedly recreating the tray service. Recovery never hides the fallback window or repeatedly steals focus. Report transitions through operational logging without flooding repeated identical failures.
+- [ ] Add isolated D-Bus tests with a synthetic StatusNotifierWatcher for registration, menu callbacks, disappearance/reappearance and missing watcher. Test delayed watcher appearance beyond the fallback threshold, session-bus recovery, and bounded attempt cancellation with a controlled nonresponding watcher/service. Verify recovery creates only one tray and shutdown cancels pending attempts/backoff. Never register test trays on the user's active desktop bus during automated tests.
 - [ ] Verify the dependency stays optional: CLI-only builds must not link GTK or ksni; GTK-without-tray builds use the control window fallback.
 - [ ] Run suite and commit `feat: add optional status notifier tray controls`.
 
