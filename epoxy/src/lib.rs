@@ -6,3 +6,5 @@ pub mod ui;
 pub mod xmlsec;
 
 pub mod diagnostics;
+
+pub mod desktop;
