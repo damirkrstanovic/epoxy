@@ -90,7 +90,7 @@ impl Nss {
         }
         let token_name = Token::from_raw(token_ptr, false).name();
 
-        debug!("requesting native PIN entry");
+        debug!("requesting card authentication credential");
         let Some(pin) = pin_prompt.prompt_pin(pin_info, token_name) else {
             return null_mut();
         };
