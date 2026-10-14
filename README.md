@@ -108,7 +108,10 @@ systemctl --user start epoxy.socket
 
 For testing, use the [ePorezi test environment](https://test.purs.gov.rs). The OLZ tax form is the simplest to start with.
 
-**DO NOT enter your PIN on the ePorezi login page**. As of 2026-02-14, PINs are being leaked to ePorezi servers.
+Epoxy uses a nonempty page-provided PIN once for that request; otherwise it asks
+through its native prompt. Entering a PIN on the page exposes it to the page's
+scripts. Where the portal permits an empty PIN, leave it empty to use native
+entry. Epoxy does not cache PINs between requests. See [PIN behavior](epoxy/docs/request-pins.md).
 
 ![demo](assets/demo.gif)
 
@@ -131,3 +134,8 @@ epoxy diagnostics disable
 
 See [runtime diagnostics](epoxy/docs/diagnostics.md) for masking, expiry, the
 required private `XDG_RUNTIME_DIR`, and troubleshooting.
+
+## Security and licensing
+
+See the [security review and trust boundaries](epoxy/docs/security-review.md)
+and [third-party licensing / distribution obligations](THIRD_PARTY.md).
