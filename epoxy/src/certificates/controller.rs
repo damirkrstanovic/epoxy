@@ -237,10 +237,10 @@ impl CertificateSnapshot {
         if revision != self.revision {
             return Err(SelectionError::Stale);
         }
-        if let Some(selected) = &self.selected {
-            if selected != key {
-                return Err(SelectionError::Missing);
-            }
+        if let Some(selected) = &self.selected
+            && selected != key
+        {
+            return Err(SelectionError::Missing);
         }
         Ok(())
     }

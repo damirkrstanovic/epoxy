@@ -173,7 +173,7 @@ impl CertificateWindow {
             }
             self.actions.borrow_mut().clear();
             for context in &snapshot.contexts {
-                let heading = text(&context.label);
+                let heading = text(&display_text(&context.label, 160));
                 heading.add_css_class("heading");
                 self.body.append(&heading);
                 self.body
@@ -191,12 +191,15 @@ impl CertificateWindow {
                     self.body.append(&text(&format!(
                         "{}{}",
                         if selected { "✓ " } else { "" },
-                        cert.holder
+                        display_text(&cert.holder, 160)
                     )));
                     self.body.append(&text(&format!(
-                        "Issuer: {}\nValid until: {}\n{}",
-                        cert.issuer, cert.not_after, cert.purpose
+                        "Issuer: {}",
+                        display_text(&cert.issuer, 200)
                     )));
+                    self.body
+                        .append(&text(&format!("Valid until: {}", cert.not_after)));
+                    self.body.append(&text(&cert.purpose));
                     self.body.append(&text(cert.eligibility.label()));
                     let details_button = Button::with_label("Details");
                     self.body.append(&details_button);
@@ -204,10 +207,10 @@ impl CertificateWindow {
                     let context_details = context.clone();
                     let weak = self.window.downgrade();
                     details_button.connect_clicked(move |_| {
-                        if let Some(parent) = weak.upgrade() {
-                            if let Some(app) = parent.application() {
-                                details(&app, &parent, &cert_details, &context_details);
-                            }
+                        if let Some(parent) = weak.upgrade()
+                            && let Some(app) = parent.application()
+                        {
+                            details(&app, &parent, &cert_details, &context_details);
                         }
                     });
                     if cert.eligibility == Eligibility::Eligible

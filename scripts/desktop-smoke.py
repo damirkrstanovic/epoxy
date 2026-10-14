@@ -38,6 +38,7 @@ for run in range(3):
             os.chmod(logfile, 0o600)
             start = time.monotonic()
             process = subprocess.Popen([binary, '--config-path', str(Path(directory) / 'absent.toml'),
+                '--selection-path', str(Path(directory) / 'app/selection.json'),
                 '--nssdb-path', str(Path(directory) / 'must-not-be-opened'), '--endpoint', '127.0.0.1:0',
                 '--pin-prompt', 'ui', '--log', 'debug'] + (['--show-window'] if run else []),
                 env=env, stdout=subprocess.DEVNULL, stderr=output)

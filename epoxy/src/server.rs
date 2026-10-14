@@ -31,6 +31,18 @@ use crate::{
     xmlsec::{XmlSec, XmlSigner},
 };
 
+struct CertificateControlLog {
+    controller: epoxy::certificates::CertificateController,
+    operation: &'static str,
+    started: Instant,
+}
+impl Drop for CertificateControlLog {
+    fn drop(&mut self) {
+        let error = self.controller.snapshot().error;
+        info!(operation=self.operation,elapsed_ms=self.started.elapsed().as_millis() as u64,error_kind=?error,"certificate control completed");
+    }
+}
+
 impl TryFrom<Response> for Message {
     type Error = Error;
 
@@ -118,6 +130,17 @@ where
     pub fn certificate_command(&self, command: epoxy::certificates::CertificateCommand) {
         use epoxy::certificates::{CertificateCommand, native::public_catalog};
         let controller = self.desktop.certificates();
+        let operation = match &command {
+            CertificateCommand::Refresh => "certificate_refresh",
+            CertificateCommand::Select { .. } => "certificate_select",
+            CertificateCommand::Clear { .. } => "certificate_clear",
+        };
+        let _log = CertificateControlLog {
+            controller: controller.clone(),
+            operation,
+            started: Instant::now(),
+        };
+        info!(operation, "certificate control received");
         if self.desktop.shutdown_requested().is_cancelled() {
             controller.close();
             return;
@@ -864,7 +887,12 @@ mod tests {
             runtime.block_on(async {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
-            let server = Server::new(ServerConfig { allow_soft_tokens: false, selection_path: "/synthetic/unused/selection.json".into() }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone(),DesktopController::new(diagnostics.clone()));
+            let (catalog,_)=epoxy::certificates::CertificateController::new();
+            let context=ContextKey{module_name:"synthetic-private-module".into(),module_library:None,token_uri:b"synthetic-private-context".to_vec()};
+            let certificate=PublicCertificate::from_der(context.clone(),include_bytes!("../tests/fixtures/eligible.der")).unwrap();
+            let chosen=certificate.key.clone();
+            catalog.publish(vec![epoxy::certificates::PublicContext{key:context,label:"synthetic-private-context".into(),requires_authentication:false,certificates:vec![certificate]}]);
+            let server = Server::new(ServerConfig { allow_soft_tokens: false, selection_path: "/synthetic/unused/selection.json".into() }, Box::new(NoPin), LazyCell::new(|| panic!("NSS must remain lazy")), diagnostics.clone(),DesktopController::with_certificates(diagnostics.clone(),catalog.clone()));
             let server_flow = async {
                 let (stream, _) = listener.accept().await.unwrap();
                 server.run(tokio_tungstenite::accept_async(stream).await.unwrap()).await.unwrap();
@@ -888,16 +916,23 @@ mod tests {
                 assert_eq!(response["payload"]["providers"][0]["name"], "NSS");
                 client.send(Message::text(input)).await.unwrap();
                 assert!(client.next().await.unwrap().is_ok());
+                server.certificate_command(epoxy::certificates::CertificateCommand::Clear{forget_saved:false});
+                catalog.commit_selection(Some(chosen.clone()),false);
+                client.send(Message::text(r#"{"operation":"GET_SIGNED_XML","input":{"certificate":{"alias":"0","name":"Synthetic Željko"},"pin":"synthetic-secret","xml":"PHNlY3JldC8+"}}"#)).await.unwrap();
+                let response=client.next().await.unwrap().unwrap();
+                let response:serde_json::Value=serde_json::from_str(response.to_text().unwrap()).unwrap();
+                assert_ne!(response["status"],0,"unlisted alias must fail before native initialization");
                 let traces = String::from_utf8_lossy(&capture.0.lock().unwrap()).matches("masked protocol trace").count();
-                assert_eq!(traces, 4);
+                assert_eq!(traces, 6);
                 diagnostics.disable().unwrap();
                 client.send(Message::text(input)).await.unwrap();
                 assert!(client.next().await.unwrap().is_ok());
                 let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
                 assert_eq!(output.matches("masked protocol trace").count(), traces);
-                for sensitive in ["synthetic-secret", "synthetic-host"] { assert!(!output.contains(sensitive)); }
+                for sensitive in ["synthetic-secret", "synthetic-host", "synthetic-private-module", "synthetic-private-context", "Synthetic Željko", "PHNlY3JldC8+"] { assert!(!output.contains(sensitive)); }
                 assert!(output.contains("correlation_id"));
                 assert!(output.contains("elapsed_ms"));
+                assert!(output.contains("certificate control completed"));
                 client.close(None).await.unwrap();
             };
             tokio::join!(server_flow, client_flow);

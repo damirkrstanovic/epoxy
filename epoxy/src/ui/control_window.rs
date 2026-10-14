@@ -89,10 +89,12 @@ impl ControlWindow {
         actions.append(&disable);
         let quit = Button::with_label("Quit Epoxy");
         quit.set_halign(gtk4::Align::End);
-        for widget in [&status, &endpoint, &activity, &heading, &diagnostics] {
+        for widget in [&status, &endpoint, &activity] {
             content.append(widget);
         }
         content.append(&certificates);
+        content.append(&heading);
+        content.append(&diagnostics);
         content.append(&settings);
         content.append(&masked);
         content.append(&timing);

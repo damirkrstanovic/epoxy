@@ -104,6 +104,7 @@ async fn main() -> Result<()> {
         server.clone(),
     );
     let catalog_server = server.clone();
+    drop(server);
     let catalog_fut = async move {
         while let Some(command) = certificate_rx.recv().await {
             catalog_server.certificate_command(command);

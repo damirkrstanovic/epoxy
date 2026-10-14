@@ -77,7 +77,7 @@ Context display text and X.509 details are owned strings kept outside the servic
 
 ### Task 1: Identity, metadata and bounded controller
 
-- [ ] Write model tests for two identical subjects with different keys; reordered contexts retaining the same selection; duplicate identical keys becoming ambiguous; expired/unsupported certificates visible but not selectable; stale-generation selection rejection. Use synthetic module/token/certificate values, not real identities.
+- [x] Write model tests for two identical subjects with different keys; reordered contexts retaining the same selection; duplicate identical keys becoming ambiguous; expired/unsupported certificates visible but not selectable; stale-generation selection rejection. Use synthetic module/token/certificate values, not real identities.
 
 ```rust
 #[test]
@@ -93,50 +93,60 @@ fn a_slot_reorder_does_not_change_a_selected_identity() {
 
 Define `synthetic_certificate` in test utilities with literal eligible validity/usage data. Implement `CatalogModel::from_entries`, `generation`, `select`, `replace_entries`, `selected_key` and unique matching; selection errors use fixed enums.
 
-- [ ] Watch the tests fail, then implement metadata parsing from DER with SHA-256, validity and RSA/digitalSignature/nonRepudiation eligibility matching the existing engine. Add synthetic DER fixtures for Unicode subjects, expiry and unsupported usage.
-- [ ] Add bounded controller tests: repeated Refresh coalesces, stale/cancelled commands do not change selection, native Busy is visible, controller snapshots contain no PIN/request/XML data. Implement `CertificateController::new() -> (Self, Receiver<CertificateCommand>)`, `request_refresh`, `request_select`, `request_clear`, `snapshot` and native-thread `publish`.
-- [ ] Run focused tests/full suite; commit the catalog/controller deliverable.
+- [x] Watch the tests fail, then implement metadata parsing from DER with SHA-256, validity and RSA/digitalSignature/nonRepudiation eligibility matching the existing engine. Add synthetic DER fixtures for Unicode subjects, expiry and unsupported usage.
+- [x] Add bounded controller tests: repeated Refresh coalesces, stale/cancelled commands do not change selection, native Busy is visible, controller snapshots contain no PIN/request/XML data. Implement `CertificateController::new() -> (Self, Receiver<CertificateCommand>)`, `request_refresh`, `request_select`, `request_clear`, `snapshot` and native-thread `publish`.
+- [x] Run focused tests/full suite; commit the catalog/controller deliverable.
 
 ### Task 2: Checked, public-only native catalog and command routing
 
-- [ ] Test failed NSS initialization using a temporary invalid database without accessing the user's card. Replace the unchecked null return and main initializer `expect` path with a stored native initialization Result and controlled operation errors.
-- [ ] Add checked NSS module/URI accessors. `PK11_GetModule` exposes `SECMODModule.commonName`/`dllName`; copy them only while the token is alive. Preserve URI bytes without lossy conversion. Check all native pointers before CStr conversion.
-- [ ] Implement `public_catalog(&Nss, allow_soft_tokens) -> Result<Vec<PublicContext>, CatalogError>` without prompting. Use a `PinPrompt` that always returns None where the existing certificate-listing API needs a context; record a private-only context as RequiresAuthentication rather than asking/retrying. All borrowed NSS/DER objects are dropped before publishing owned metadata. Preserve logout guard semantics.
-- [ ] Write a synthetic native executor test that proves catalog requests execute on the same thread as signing and cannot overlap a blocking native operation; GTK/diagnostics controllers remain responsive. Route the bounded receiver through the existing service runtime, with commands rejected on shutdown. No reader probe occurs at startup or GET_INFO.
-- [ ] Run tests/full suite; commit public discovery and command routing. If software-token infrastructure is unavailable, report that limitation; do not silently count a skipped native-authentication test as passed.
+- [x] Test failed NSS initialization using a temporary invalid database without accessing the user's card. Replace the unchecked null return and main initializer `expect` path with a stored native initialization Result and controlled operation errors.
+- [x] Add checked NSS module/URI accessors. `PK11_GetModule` exposes `SECMODModule.commonName`/`dllName`; copy them only while the token is alive. Preserve URI bytes without lossy conversion. Check all native pointers before CStr conversion.
+- [x] Implement `public_catalog(&Nss, allow_soft_tokens) -> Result<Vec<PublicContext>, CatalogError>` without prompting. Use a `PinPrompt` that always returns None where the existing certificate-listing API needs a context; record a private-only context as RequiresAuthentication rather than asking/retrying. All borrowed NSS/DER objects are dropped before publishing owned metadata. Preserve logout guard semantics.
+- [x] Write a synthetic native executor test that proves catalog requests execute on the same thread as signing and cannot overlap a blocking native operation; GTK/diagnostics controllers remain responsive. Route the bounded receiver through the existing service runtime, with commands rejected on shutdown. No reader probe occurs at startup or GET_INFO.
+- [x] Run tests/full suite; commit public discovery and command routing. If software-token infrastructure is unavailable, report that limitation; do not silently count a skipped native-authentication test as passed.
 
 ### Task 3: Enforce the selected module/context/certificate through signing
 
-- [ ] Store connection-local certificate records with `CertificateKey` and selection revision. Without a preference, preserve portal selection. With a preference, GET_TERMINALS/GET_CERTIFICATES expose only the matching eligible identity; missing/ambiguous matches produce compatible empty/error responses.
-- [ ] Revalidate a Select command against fresh public metadata before committing it. Reject changes during an active authorization/signature. Native source labels never determine a match.
-- [ ] Add tests that changing selection after certificate listing makes the old alias fail before authentication, that swapping context/module/fingerprint cannot redirect signing, and that a missing remembered identity never falls back to another card. Use a synthetic native backend boundary with a signing counter; failure paths must leave it at zero.
-- [ ] Validate the XMLSec key's actual native slot before `signer.sign`. The current `xmlSecNssAppKeyFromCertLoadSECItem` performs certificate-based global key lookup. Include the installed public NSS PKI header to expose `xmlSecNssPKIKeyDataGetPrivKey`; obtain the private-key slot via `PK11_GetSlotFromPrivateKey`, check it against the selected live token, and release the slot according to verified NSS ownership semantics. A wrong-slot key is rejected even if its certificate DER matches. Retain the existing algorithms, certificate formatting and native authentication.
-- [ ] Test wrong-key-slot rejection and cleanup separately from UI preferences, including equal DER in different modules. Audit native ownership against library source before adding pointer wrappers; implement RAII for acquired references. No opaque key crosses threads.
-- [ ] Run tests/full suite; commit exact signing identity enforcement.
+- [x] Store connection-local certificate records with `CertificateKey` and selection revision. Without a preference, preserve portal selection. With a preference, GET_TERMINALS/GET_CERTIFICATES expose only the matching eligible identity; missing/ambiguous matches produce compatible empty/error responses.
+- [x] Revalidate a Select command against fresh public metadata before committing it. Reject changes during an active authorization/signature. Native source labels never determine a match.
+- [x] Add tests that changing selection after certificate listing makes the old alias fail before authentication, that swapping context/module/fingerprint cannot redirect signing, and that a missing remembered identity never falls back to another card. Use a synthetic native backend boundary with a signing counter; failure paths must leave it at zero.
+- [x] Validate the XMLSec key's actual native slot before `signer.sign`. The current `xmlSecNssAppKeyFromCertLoadSECItem` performs certificate-based global key lookup. Include the installed public NSS PKI header to expose `xmlSecNssPKIKeyDataGetPrivKey`; obtain the private-key slot via `PK11_GetSlotFromPrivateKey`, check it against the selected live token, and release the slot according to verified NSS ownership semantics. A wrong-slot key is rejected even if its certificate DER matches. Retain the existing algorithms, certificate formatting and native authentication.
+- [x] Test wrong-key-slot rejection and cleanup separately from UI preferences, including equal DER in different modules. Audit native ownership against library source before adding pointer wrappers; implement RAII for acquired references. No opaque key crosses threads.
+- [x] Run tests/full suite; commit exact signing identity enforcement.
 
 ### Task 4: Explicit nonsecret preferences
 
-- [ ] Add `--selection-path` and config support; default to an app-private XDG config location. The local test launcher uses a file inside its existing private fixture, never the browser NSS directory.
-- [ ] Test session-only choice performs no write; explicit remember reloads the exact key; malformed/oversized/version-unknown preference returns a fixed local error; symlinks/unrelated files are rejected; failed save leaves the previous selection intact.
-- [ ] Implement versioned JSON bounded to 8 KiB, a 0700 app directory and 0600 preference file. Use verified directory descriptors and atomic same-directory replacement, with checked existing file ownership/type. Save before committing a remembered selection; Forget removes only a verified app-owned preference. Do not log preference contents.
-- [ ] Run focused tests/full suite; commit preference storage.
+- [x] Add `--selection-path` and config support; default to an app-private XDG config location. The local test launcher uses a file inside its existing private fixture, never the browser NSS directory.
+- [x] Test session-only choice performs no write; explicit remember reloads the exact key; malformed/oversized/version-unknown preference returns a fixed local error; symlinks/unrelated files are rejected; failed save leaves the previous selection intact.
+- [x] Implement versioned JSON bounded to 8 KiB, a 0700 app directory and 0600 preference file. Use verified directory descriptors and atomic same-directory replacement, with checked existing file ownership/type. Save before committing a remembered selection; Forget removes only a verified app-owned preference. Do not log preference contents.
+- [x] Run focused tests/full suite; commit preference storage.
 
 ### Task 5: Tray certificate actions and GTK fallback
 
-- [ ] Write native-menu action tests for Refresh, selecting one eligible certificate, remembering/clearing, generation mismatch and disabled selection during a PIN wait. Metadata appears only in explicitly opened certificate entries; tooltip and DesktopSnapshot stay identity-free. Escape underscores in untrusted menu labels.
-- [ ] Implement certificate submenus with issuer, validity and purpose, eligible actions and selected checkmark. Refresh is explicit; no placeholder disabled fake feature or hidden PIN prompt. Fixed discovery/error states explain NoCard, Busy, RequiresAuthentication and selected identity unavailable.
-- [ ] Add a private GTK scenario for the fallback list/details, selection/remember actions, refresh, Close/Escape and cancellation while the native service is busy. Test plain-text long Unicode labels and no implicit signing during discovery/selection.
-- [ ] Add certificate controls to the no-tray fallback; keep routine tray interactions menu-only. Do not add a dashboard or certificate-administration actions.
-- [ ] Run tests/full suite; commit the tray/fallback certificate UI.
+- [x] Write native-menu action tests for Refresh, selecting one eligible certificate, remembering/clearing, generation mismatch and disabled selection during a PIN wait. Metadata appears only in explicitly opened certificate entries; tooltip and DesktopSnapshot stay identity-free. Escape underscores in untrusted menu labels.
+- [x] Implement certificate submenus with issuer, validity and purpose, eligible actions and selected checkmark. Refresh is explicit; no placeholder disabled fake feature or hidden PIN prompt. Fixed discovery/error states explain NoCard, Busy, RequiresAuthentication and selected identity unavailable.
+- [x] Add a private GTK scenario for the fallback list/details, selection/remember actions, refresh, Close/Escape and cancellation while the native service is busy. Test plain-text long Unicode labels and no implicit signing during discovery/selection.
+- [x] Add certificate controls to the no-tray fallback; keep routine tray interactions menu-only. Do not add a dashboard or certificate-administration actions.
+- [x] Run tests/full suite; commit the tray/fallback certificate UI.
 
 ### Task 6: Reviewable PR and user-operated ESS acceptance
 
-- [ ] Verify default, CLI-only and GTK-only workspace suites, formatting and application Clippy. Confirm startup/GET_INFO still avoids native initialization; verify request logging remains masked after discovery/selection.
-- [ ] Run all affected isolated GUI/bus tests; inspect long labels at 100%/200%. Extend synthetic portal flow to cover selection revisions and same-subject/different-context aliases.
-- [ ] Preserve the working desktop helper and build a separate certificate test helper using the existing isolated OpenSC database/preferences path. No real PIN/identity/DER/XML is committed or sent in a PR.
+- [x] Verify default, CLI-only and GTK-only workspace suites, formatting and application Clippy. Confirm startup/GET_INFO still avoids native initialization; verify request logging remains masked after discovery/selection.
+- [x] Run all affected isolated GUI/bus tests; inspect long labels at 100%/200%. Extend synthetic portal flow to cover selection revisions and same-subject/different-context aliases.
+- [x] Preserve the working desktop helper and build a separate certificate test helper using the existing isolated OpenSC database/preferences path. No real PIN/identity/DER/XML is committed or sent in a PR.
 - [ ] Independent whole-branch review, then one failing-test-first fix pass for Important/Critical findings. Publish only to the user's fork, identifying desktop PR #3 as prerequisite. Keep actual card acceptance pending user interaction rather than declaring it covered by synthetic tests.
 - [ ] User acceptance: refresh the ESS card's two contexts, inspect issuer/expiry/purpose, select Digital Signature by identity, reload portal certificates, sign manually in the test portal, test reconnect/restart, remove/reinsert card and confirm no fallback/wrong-key signing. The PIN remains native and uncached.
 
 ## Self-review
 
 Scope maps to the user's confirmed functions. Native catalog, selected key enforcement and persistence remain separate units and test cycles. Display identities are confined to an explicit certificate view; operational status remains secret-free. Existing synchronous native work limits cancellation of an opaque call, but controls retain their independent threads. Broader certificate administration, cryptographic backend replacement and package portability are not implied by this plan.
+
+## Implementation evidence (2026-10-14)
+
+- Default: 60 automatic tests (52 library + 8 server). CLI-only: 53; GTK-only: 55.
+- Eight explicit native/GTK/bus cases run separately, including Unicode plain-text details, session/remember/clear actions, Busy, Close/Escape and tray recovery. Synthetic long-label screenshots inspected at 100%/200%; list summaries were shortened and details remain scrollable.
+- Synthetic NSS RSA key: correct/wrong XMLSec slot checks repeated 100 times; clean NSS shutdown; generated XML signature verified by xmlsec1. No real card accessed.
+- Dynamic request tracing remains masked after catalog/selection, including an unlisted signing alias rejected before NSS initialization. Certificate-control operation logs include fixed operation/error enums and duration, without identity values.
+- Three fresh debug processes: listener about 31.5 ms; GET_INFO handshake about 32–36 ms, with nonexistent NSS path. No native initialization or PIN access; clean SIGTERM. These are fresh-process measurements with uncontrolled OS caches, not filesystem-cold benchmarks.
+- Private user test launcher is separate from the preserved desktop build and uses the existing isolated OpenSC NSS database plus an isolated preference path. Actual ESS test-portal signing/reconnect/removal acceptance remains user-operated.
+- External private-only software-token authentication behavior is not covered by the internal NSS key fixture (SoftHSM unavailable).
