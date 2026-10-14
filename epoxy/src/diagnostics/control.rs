@@ -107,7 +107,7 @@ fn endpoint(runtime: &Path, create: bool) -> Result<(fs::File, PathBuf)> {
     ));
     Ok((directory, socket))
 }
-fn peer_uid(stream: &UnixStream) -> Result<u32> {
+fn peer_credentials(stream: &UnixStream) -> Result<libc::ucred> {
     let mut credential: libc::ucred = unsafe { std::mem::zeroed() };
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     // Both pointers refer to correctly sized live buffers; getsockopt fills them.
@@ -124,7 +124,10 @@ fn peer_uid(stream: &UnixStream) -> Result<u32> {
         result == 0 && length as usize == std::mem::size_of::<libc::ucred>(),
         "cannot verify control peer"
     );
-    Ok(credential.uid)
+    Ok(credential)
+}
+fn peer_uid(stream: &UnixStream) -> Result<u32> {
+    Ok(peer_credentials(stream)?.uid)
 }
 fn same_user(uid: u32) -> Result<()> {
     ensure!(
@@ -132,6 +135,43 @@ fn same_user(uid: u32) -> Result<()> {
         "control peer must be the application user"
     );
     Ok(())
+}
+
+// Reporting a collision must not unlink anything or send commands to an unknown peer.
+// The held directory descriptor still anchors every filesystem/connection operation.
+fn bind_conflict_message(runtime: &Path, socket_path: &Path) -> String {
+    let display = runtime.join("epoxy/control.sock");
+    let kind = || -> Result<Option<i32>> {
+        let metadata = fs::symlink_metadata(socket_path)?;
+        ensure!(
+            metadata.file_type().is_socket()
+                && metadata.uid() == effective_uid()
+                && metadata.mode() & 0o7777 == 0o600,
+            "invalid endpoint"
+        );
+        let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+        let address = socket2::SockAddr::unix(socket_path)?;
+        match socket.connect_timeout(&address, Duration::from_millis(200)) {
+            Ok(()) => {
+                let stream: UnixStream = socket.into();
+                let credentials = peer_credentials(&stream)?;
+                same_user(credentials.uid)?;
+                ensure!(credentials.pid > 0, "invalid peer PID");
+                Ok(Some(credentials.pid))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    };
+    let explanation=match kind() {
+        Ok(Some(pid))=>format!("A process is already listening on Epoxy's diagnostics Unix socket (PID {pid}).\nQuit the existing Epoxy instance from its tray, stop it in its launching terminal, or stop its user service before starting another instance."),
+        Ok(None)=>"A leftover diagnostics Unix socket exists, but no process is listening.\nAfter confirming the earlier Epoxy instance has stopped, remove only this socket file and start Epoxy again.".into(),
+        Err(_)=>"Epoxy cannot verify the existing diagnostics endpoint. It may be busy or belong to another process.\nInspect it before changing anything; no file was removed.".into(),
+    };
+    format!(
+        "{explanation}\nSocket path: {}\nThis is a Unix socket, not a TCP port. Inspect Unix listeners with: ss -xlp",
+        display.display()
+    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -224,9 +264,14 @@ pub struct ControlServer {
 impl ControlServer {
     pub fn start(diagnostics: Diagnostics, runtime: &Path) -> Result<Self> {
         let (directory, socket) = endpoint(runtime, true)?;
-        let listener = UnixListener::bind(&socket).context(
-            "cannot bind control socket; an existing endpoint is never removed automatically",
-        )?;
+        let listener=UnixListener::bind(&socket).map_err(|error| {
+            let message=if error.kind()==std::io::ErrorKind::AddrInUse {
+                bind_conflict_message(runtime,&socket)
+            } else {
+                format!("Cannot create Epoxy diagnostics Unix socket at {}. Check runtime directory permissions.",runtime.join("epoxy/control.sock").display())
+            };
+            anyhow::Error::new(error).context(message)
+        })?;
         let metadata = fs::symlink_metadata(&socket)?;
         let mut server = Self {
             stop: Arc::new(AtomicBool::new(false)),
@@ -408,6 +453,51 @@ mod tests {
             fs::read(temp.0.join("epoxy/control.sock")).unwrap(),
             b"unrelated"
         );
+    }
+    #[test]
+    fn duplicate_start_identifies_unix_endpoint_and_existing_process() {
+        let temp = Temp::new();
+        let (diagnostics, _subscriber) = subscriber("info", std::io::sink).unwrap();
+        let _server = ControlServer::start(diagnostics.clone(), &temp.0).unwrap();
+        let error = ControlServer::start(diagnostics, &temp.0).err().unwrap();
+        let message = format!("{error:#}");
+        assert!(message.contains(&temp.0.join("epoxy/control.sock").display().to_string()));
+        assert!(message.contains(&format!("PID {}", std::process::id())));
+        assert!(message.contains("Unix socket"));
+        assert!(message.contains("Quit"));
+        assert!(
+            !request(&temp.0, &Command::Status {})
+                .unwrap()
+                .requests_masked
+        );
+    }
+    #[test]
+    fn stale_socket_error_explains_recovery_without_removing_the_file() {
+        let temp = Temp::new();
+        let (diagnostics, _subscriber) = subscriber("info", std::io::sink).unwrap();
+        let (_directory, path) = endpoint(&temp.0, true).unwrap();
+        let listener = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        drop(listener);
+        let identity = fs::symlink_metadata(&path).unwrap().ino();
+        let error = ControlServer::start(diagnostics, &temp.0).err().unwrap();
+        let message = format!("{error:#}");
+        assert!(message.contains("no process is listening"));
+        assert!(message.contains(&temp.0.join("epoxy/control.sock").display().to_string()));
+        assert!(message.contains("remove only this socket file"));
+        assert_eq!(fs::symlink_metadata(&path).unwrap().ino(), identity);
+    }
+    #[test]
+    fn unrelated_endpoint_is_not_reported_as_stale_or_given_removal_advice() {
+        let temp = Temp::new();
+        let (diagnostics, _subscriber) = subscriber("info", std::io::sink).unwrap();
+        let (_directory, path) = endpoint(&temp.0, true).unwrap();
+        fs::write(&path, b"unrelated").unwrap();
+        let error = ControlServer::start(diagnostics, &temp.0).err().unwrap();
+        let message = format!("{error:#}");
+        assert!(message.contains("cannot verify"));
+        assert!(!message.contains("remove only this socket file"));
+        assert_eq!(fs::read(&path).unwrap(), b"unrelated");
     }
     #[test]
     fn expiry_and_control_continue_while_other_work_is_blocked() {
