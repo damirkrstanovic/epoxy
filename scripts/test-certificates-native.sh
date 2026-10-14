@@ -14,5 +14,5 @@ certutil -S -d "sql:$fixture/nss" -n synthetic -s 'CN=Synthetic native fixture' 
   -f "$fixture/password" --keyUsage digitalSignature,nonRepudiation
 certutil -L -d "sql:$fixture/nss" -n synthetic -r > "$fixture/cert.der"
 certutil -L -d "sql:$fixture/nss" -n synthetic -a > "$fixture/cert.pem"
-EPOXY_SYNTHETIC_NSS_DB="$fixture/nss" EPOXY_SYNTHETIC_CERT_DER="$fixture/cert.der" EPOXY_SYNTHETIC_SIGNED_XML="$fixture/signed.xml" cargo test -p epoxy --offline --lib nss::native_tests::xmlsec_key_slot_is_checked_and_all_references_are_released -- --ignored --exact --test-threads=1
+EPOXY_SYNTHETIC_NSS_DB="$fixture/nss" EPOXY_SYNTHETIC_CERT_DER="$fixture/cert.der" EPOXY_SYNTHETIC_SIGNED_XML="$fixture/signed.xml" cargo test -p epoxy --locked --offline --profile "${EPOXY_TEST_PROFILE:-dev}" --lib nss::native_tests::xmlsec_key_slot_is_checked_and_all_references_are_released -- --ignored --exact --test-threads=1
 xmlsec1 --verify --pubkey-cert-pem "$fixture/cert.pem" "$fixture/signed.xml"

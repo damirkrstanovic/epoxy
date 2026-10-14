@@ -1,0 +1,5 @@
+epoxy-signing (0.5.0-1) unstable; urgency=medium
+
+  * Initial upstream native package with GTK tray and OpenSC support.
+
+ -- Epoxy contributors <noreply@github.com>  Thu, 15 Oct 2026 12:00:00 +0200

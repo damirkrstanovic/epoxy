@@ -36,6 +36,11 @@ The reviewed tree contains no SmartBox JAR, decompiled Java implementation or
 vendor PKCS#11 binary. Protocol interoperability does not grant redistribution
 rights to those vendor components.
 
+The native packaging source exporter (`packaging/make-source.py`) vendors the
+locked Rust sources and retains their license/notice files and metadata inventory.
+Distribute that matching source archive with the resulting packages; the binary
+packages also install the notices. Native libraries remain distro dependencies.
+
 ## Before publishing binary packages
 
 1. Generate the license/copyright/NOTICE bundle for the exact lockfile, target
