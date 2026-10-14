@@ -9,9 +9,11 @@ License:        @BUNDLED_LICENSES@
 URL:            https://github.com/damirkrstanovic/epoxy
 Source0:        %{name}-%{version}.tar.xz
 ExclusiveArch:  x86_64
-BuildRequires:  cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config
+BuildRequires:  cargo >= 1.89
+BuildRequires:  rust >= 1.89
+BuildRequires:  gcc gcc-c++ clang-devel pkgconf-pkg-config
 BuildRequires:  gtk4-devel nss-devel nspr-devel libxml2-devel xmlsec1-nss-devel libtool-ltdl-devel
-BuildRequires:  desktop-file-utils
+BuildRequires:  desktop-file-utils nss-tools xmlsec1 xmlsec1-openssl
 Requires:       opensc pcsc-lite ccid
 Conflicts:      epoxy epoxy-git
 %global debug_package %{nil}
@@ -29,15 +31,16 @@ export CARGO_TARGET_DIR=target
 cargo build --frozen --release -p epoxy
 
 %check
-desktop-file-validate packaging/common/epoxy-signing.desktop
+desktop-file-validate packaging/common/dev.semyon.epoxy.desktop
 cargo test --frozen --release -p epoxy --lib
+EPOXY_TEST_PROFILE=release scripts/test-certificates-native.sh
 
 %install
 packaging/install.sh "%{buildroot}" target/release/epoxy
 
 %files
 %{_bindir}/epoxy
-%{_datadir}/applications/epoxy-signing.desktop
+%{_datadir}/applications/dev.semyon.epoxy.desktop
 %{_datadir}/icons/hicolor/scalable/apps/epoxy-signing.svg
 %{_prefix}/lib/systemd/user/epoxy.service
 %{_prefix}/lib/systemd/user/epoxy.socket

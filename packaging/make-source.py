@@ -71,6 +71,17 @@ def main():
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(file, target)
                     retained.append(str(relative))
+            # Some published crates omit their workspace license files. Retain
+            # audited supplements from the exact .cargo_vcs_info.json revision,
+            # without changing checksum-protected vendored files.
+            supplement = source / "packaging/license-overrides" / destination.name
+            if supplement.is_dir():
+                for file in sorted(supplement.iterdir()):
+                    shutil.copyfile(file, destination / file.name)
+                    retained.append(file.name)
+            legal_prefixes = ("LICENSE", "LICENCE", "UNLICENSE", "COPYING", "COPYRIGHT", "NOTICE", "AUTHORS")
+            if not any(Path(name).name.upper().startswith(legal_prefixes) for name in retained):
+                raise SystemExit(f"Missing license notice: {destination.name}; audit the exact upstream source")
             shutil.copyfile(crate / "Cargo.toml", destination / "Cargo.toml")
             inventory.append({"name": package["name"], "version": package["version"], "license": expression, "notices": retained})
         (licenses / "inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")

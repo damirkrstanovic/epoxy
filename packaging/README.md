@@ -76,8 +76,8 @@ keep it. Do not import your private key: it remains on the smart card.
 ## Optional startup
 
 For normal desktop use, add **Epoxy Signing** to your desktop's startup applications,
-or copy `/usr/share/applications/epoxy-signing.desktop` to
-`~/.config/autostart/epoxy-signing.desktop`. Do not also enable socket activation.
+or copy `/usr/share/applications/dev.semyon.epoxy.desktop` to
+`~/.config/autostart/dev.semyon.epoxy.desktop`. Do not also enable socket activation.
 
 The existing optional user systemd units are included for experienced users.
 They require the graphical environment to be imported into the user manager for
@@ -89,7 +89,7 @@ installation. Do not enable them together with desktop autostart or another help
 
 Build tools: Rust **1.95.0** in the verified matrix, C/C++ compiler, libclang,
 pkg-config, native development libraries and the distribution's package tools.
-The locked dependencies require Rust >= 1.88, which is newer than some supported
+The locked dependencies require Rust >= 1.89, which is newer than some supported
 distros' packaged compiler. `packaging/ci/Dockerfile` installs a pinned Rust
 build toolchain separately; it is not shipped as a runtime dependency.
 

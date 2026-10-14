@@ -10,9 +10,10 @@ override_dh_auto_build:
 	cargo build --frozen --release -p epoxy
 
 override_dh_auto_test:
-	desktop-file-validate packaging/common/epoxy-signing.desktop
+	desktop-file-validate packaging/common/dev.semyon.epoxy.desktop
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	cargo test --frozen --release -p epoxy --lib
+	EPOXY_TEST_PROFILE=release scripts/test-certificates-native.sh
 endif
 
 override_dh_auto_install:

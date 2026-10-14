@@ -6,7 +6,7 @@ arch=('x86_64')
 url='https://github.com/damirkrstanovic/epoxy'
 license=('@BUNDLED_LICENSES@')
 depends=('gtk4' 'nss' 'nspr' 'libxml2' 'xmlsec' 'opensc' 'pcsclite' 'ccid')
-makedepends=('rust' 'cargo' 'clang' 'pkgconf' 'desktop-file-utils')
+makedepends=('rust>=1.89' 'cargo>=1.89' 'clang' 'pkgconf' 'desktop-file-utils')
 optdepends=('systemd: optional user socket activation')
 provides=('epoxy')
 conflicts=('epoxy' 'epoxy-git')
@@ -22,8 +22,9 @@ build() {
 
 check() {
     cd "$pkgname-$pkgver"
-    desktop-file-validate packaging/common/epoxy-signing.desktop
+    desktop-file-validate packaging/common/dev.semyon.epoxy.desktop
     cargo test --frozen --release -p epoxy --lib
+    EPOXY_TEST_PROFILE=release scripts/test-certificates-native.sh
 }
 
 package() {

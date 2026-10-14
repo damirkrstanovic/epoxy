@@ -16,6 +16,15 @@ cd "${sources[0]}"
 export SOURCE_DATE_EPOCH=$(cat SOURCE_DATE_EPOCH)
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-2}
 export CARGO_PROFILE_DEV_DEBUG=0
+{
+    cat /etc/os-release
+    printf 'SOURCE_COMMIT='
+    cat SOURCE_COMMIT
+    sha256sum "$archive"
+    rustc --version
+    cargo --version
+    pkg-config --modversion gtk4 nss xmlsec1-nss
+} > /output/BUILD-INFO.txt
 case "$ID" in
     debian|ubuntu)
         # Toolchain is pinned in the image, newer than the distro rustc package.
@@ -24,7 +33,8 @@ case "$ID" in
         debs=(/build/epoxy-signing_*_amd64.deb)
         [[ ${#debs[@]} == 1 ]]
         dpkg -i "${debs[0]}"
-        cp "${debs[0]}" /output/
+        # Distinct download names avoid mixing Debian and Ubuntu artifacts.
+        cp "${debs[0]}" "/output/$(basename "${debs[0]}" .deb)-${ID}${VERSION_ID}.deb"
         ;;
     fedora)
         mkdir -p /build/rpm/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
@@ -52,9 +62,9 @@ esac
 # Installed executable, library linkage and desktop file; never start a service.
 epoxy --version
 if ldd /usr/bin/epoxy | grep -q 'not found'; then exit 1; fi
-desktop-file-validate /usr/share/applications/epoxy-signing.desktop
-# Actual NSS signing and independent XML verification, not a real smart card.
-bash scripts/test-certificates-native.sh
+desktop-file-validate /usr/share/applications/dev.semyon.epoxy.desktop
+# Native recipes run synthetic NSS signing and independent XML verification
+# in their check phase, reusing the same release build and distro compiler flags.
 case "$ID" in
     debian|ubuntu) dpkg --remove epoxy-signing ;;
     fedora) rpm -e epoxy-signing ;;
@@ -62,4 +72,4 @@ case "$ID" in
 esac
 test ! -e /usr/bin/epoxy
 cd /output
-sha256sum -- *.deb *.rpm *.zst > SHA256SUMS
+sha256sum -- *.deb *.rpm *.zst BUILD-INFO.txt > SHA256SUMS
