@@ -61,6 +61,9 @@ impl Nss {
             )
         };
 
+        if ptr.is_null() {
+            return Err(InitError::Native);
+        }
         Ok(Nss { ptr })
     }
 
@@ -82,6 +85,9 @@ impl Nss {
             return null_mut();
         }
 
+        if token_ptr.is_null() {
+            return null_mut();
+        }
         let token_name = Token::from_raw(token_ptr, false).name();
 
         debug!("requesting native PIN entry");
@@ -93,6 +99,9 @@ impl Nss {
         let pin_buf = pin.as_bytes_with_nul();
         let in_buf_ptr = pin_buf.as_ptr().cast::<c_char>();
         let out_buf_ptr = unsafe { PORT_Alloc(pin_buf.len()) } as *mut c_char;
+        if out_buf_ptr.is_null() {
+            return null_mut();
+        }
         unsafe { ptr::copy_nonoverlapping(in_buf_ptr, out_buf_ptr, pin_buf.len()) };
 
         out_buf_ptr
@@ -119,6 +128,28 @@ impl Nss {
         } else {
             Some(Token::from_raw(ptr, true))
         }
+    }
+
+    pub fn find_context<'a>(
+        &'a self,
+        key: &crate::certificates::ContextKey,
+    ) -> Result<Token<'a>, crate::certificates::SelectionError> {
+        use crate::certificates::SelectionError;
+        let list = self.get_tokens().ok_or(SelectionError::Unavailable)?;
+        let mut found = None;
+        for token in list.iter() {
+            if token.context_key()? == *key {
+                if found.is_some() {
+                    return Err(SelectionError::Ambiguous);
+                }
+                let ptr = unsafe { PK11_ReferenceSlot(token.ptr) };
+                if ptr.is_null() {
+                    return Err(SelectionError::Unavailable);
+                }
+                found = Some(Token::from_raw(ptr, true));
+            }
+        }
+        found.ok_or(SelectionError::Missing)
     }
 
     pub fn get_certs_in_token<'a>(
@@ -185,6 +216,8 @@ impl Nss {
 pub enum InitError {
     #[error("C interop error")]
     Ffi,
+    #[error("NSS initialization failed")]
+    Native,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -272,15 +305,69 @@ impl<'a> Token<'a> {
         }
     }
 
-    pub fn uri(&self) -> TokenUri {
+    pub fn uri(&self) -> Option<TokenUri> {
         let uri_ptr = unsafe { PK11_GetTokenURI(self.ptr as *mut _) };
+        if uri_ptr.is_null() {
+            return None;
+        }
         let uri = unsafe { CStr::from_ptr(uri_ptr).to_owned() };
         unsafe { PORT_Free(uri_ptr as *mut c_void) }; // `PK11_GetTokenURI` allocates string
-        TokenUri(uri)
+        Some(TokenUri(uri))
+    }
+
+    pub fn context_key(
+        &self,
+    ) -> Result<crate::certificates::ContextKey, crate::certificates::SelectionError> {
+        use crate::certificates::{ContextKey, SelectionError};
+        let module = unsafe { PK11_GetModule(self.ptr) };
+        if module.is_null() {
+            return Err(SelectionError::Unavailable);
+        }
+        // Borrowed module fields are copied while this slot reference is alive.
+        let name = unsafe { (*module).commonName };
+        if name.is_null() {
+            return Err(SelectionError::Unavailable);
+        }
+        let module_name = unsafe { CStr::from_ptr(name) }
+            .to_str()
+            .map_err(|_| SelectionError::Unavailable)?
+            .to_owned();
+        let library = unsafe { (*module).dllName };
+        let module_library = if library.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(library) }
+                    .to_str()
+                    .map_err(|_| SelectionError::Unavailable)?
+                    .to_owned(),
+            )
+        };
+        let uri = self.uri().ok_or(SelectionError::Unavailable)?;
+        Ok(ContextKey {
+            module_name,
+            module_library,
+            token_uri: uri.0.as_bytes().to_vec(),
+        })
+    }
+    pub(crate) fn matches_private_key(&self, key: *mut SECKEYPrivateKey) -> bool {
+        if key.is_null() {
+            return false;
+        }
+        // NSS returns a referenced slot; always release it, even on mismatch.
+        let slot = unsafe { PK11_GetSlotFromPrivateKey(key) };
+        if slot.is_null() {
+            return false;
+        }
+        let actual = Self::from_raw(slot, true);
+        self.ptr == actual.ptr
     }
 
     pub fn name(&self) -> String {
         let token_name_ptr = unsafe { PK11_GetTokenName(self.ptr as *mut _) };
+        if token_name_ptr.is_null() {
+            return "Unnamed PIN context".into();
+        }
         unsafe { CStr::from_ptr(token_name_ptr).to_string_lossy().to_string() }
     }
 
@@ -446,5 +533,14 @@ impl<'a> Iterator for CertListIter<'a> {
         let item_ptr = self.item_ptr?;
         self.item_ptr = self.list.next_ptr(item_ptr);
         Some(Cert::from_raw(unsafe { *item_ptr }.cert))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn failed_initialization_never_constructs_a_null_native_context() {
+        assert!(Nss::initialize("sql:/nonexistent/epoxy-synthetic-invalid-db".into()).is_err());
     }
 }

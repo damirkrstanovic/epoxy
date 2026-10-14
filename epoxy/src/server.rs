@@ -80,18 +80,18 @@ pub struct Server<F> {
     diagnostics: Diagnostics,
     desktop: DesktopController,
     pin_prompt: Box<dyn PinPrompt>,
-    nss_xmlsec: LazyCell<(Nss, XmlSec), F>,
+    nss_xmlsec: LazyCell<Result<(Nss, XmlSec)>, F>,
     xml_parser: Parser,
 }
 
 impl<F> Server<F>
 where
-    F: FnOnce() -> (Nss, XmlSec),
+    F: FnOnce() -> Result<(Nss, XmlSec)>,
 {
     pub fn new(
         config: ServerConfig,
         pin_prompt: Box<dyn PinPrompt>,
-        nss_xmlsec: LazyCell<(Nss, XmlSec), F>,
+        nss_xmlsec: LazyCell<Result<(Nss, XmlSec)>, F>,
         diagnostics: Diagnostics,
         desktop: DesktopController,
     ) -> Server<F> {
@@ -102,6 +102,28 @@ where
             pin_prompt,
             nss_xmlsec,
             xml_parser: Parser::default(),
+        }
+    }
+
+    pub fn certificate_command(&self, command: epoxy::certificates::CertificateCommand) {
+        use epoxy::certificates::{CertificateCommand, native::public_catalog};
+        let controller = self.desktop.certificates();
+        if self.desktop.shutdown_requested().is_cancelled() {
+            controller.close();
+            return;
+        }
+        let _busy = controller.native_operation();
+        let Ok((nss, _)) = &*self.nss_xmlsec else {
+            controller.unavailable();
+            return;
+        };
+        match command {
+            CertificateCommand::Refresh => match public_catalog(nss, self.config.allow_soft_tokens)
+            {
+                Ok(contexts) => controller.publish(contexts),
+                Err(_) => controller.unavailable(),
+            },
+            _ => controller.finish(Err(epoxy::certificates::SelectionError::Unavailable)),
         }
     }
 
@@ -225,6 +247,7 @@ where
                 }
                 _ => OperationKind::Information,
             };
+            let _native = self.desktop.certificates().native_operation();
             let operation = self.desktop.operation_started(context.get().0, kind);
             let response = {
                 let span = tracing::info_span!(
@@ -275,7 +298,9 @@ where
         &self,
         session: &mut Session,
     ) -> ResultResponse<responses::GetTerminals, responses::GetTerminalsErrorCode> {
-        let (ref nss, _) = *self.nss_xmlsec;
+        let Ok((nss, _)) = &*self.nss_xmlsec else {
+            return ResultResponse::error(responses::GetTerminalsErrorCode::GenericError);
+        };
 
         let tokens = nss.get_tokens();
         let Some(tokens) = tokens else {
@@ -284,7 +309,7 @@ where
 
         let valid_tokens = tokens.iter().filter_map(|token| {
             if (self.config.allow_soft_tokens || token.is_hw()) && !token.is_internal() {
-                Some((token.uri(), token.name()))
+                token.uri().map(|uri| (uri, token.name()))
             } else {
                 None
             }
@@ -306,7 +331,9 @@ where
         session: &mut Session,
         request: requests::GetCertificates,
     ) -> ResultResponse<responses::GetCertificates, responses::GetCertificatesErrorCode> {
-        let (ref nss, _) = *self.nss_xmlsec;
+        let Ok((nss, _)) = &*self.nss_xmlsec else {
+            return ResultResponse::error(responses::GetCertificatesErrorCode::GenericError);
+        };
 
         let token_uri = session.terminals.get(request.terminal_id);
         let Some(token_uri) = token_uri else {
@@ -377,7 +404,9 @@ where
         if self.desktop.shutdown_requested().is_cancelled() {
             return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
         }
-        let (ref nss, ref xmlsec) = *self.nss_xmlsec;
+        let Ok((nss, xmlsec)) = &*self.nss_xmlsec else {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        };
 
         let cert = session.certs.get(request.certificate.alias);
         let Some((token_uri, der, cert_label)) = cert else {
@@ -494,6 +523,75 @@ mod tests {
         fn make_writer(&'a self) -> Self {
             self.clone()
         }
+    }
+    #[test]
+    fn public_catalog_runs_on_native_thread_and_controls_remain_responsive() {
+        use epoxy::certificates::{
+            CatalogStatus, CertificateCommand, CertificateController, SelectionError,
+        };
+        let (catalog, mut rx) = CertificateController::new();
+        catalog.request_refresh().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker_catalog = catalog.clone();
+        let worker = std::thread::spawn(move || {
+            struct NoPin;
+            impl PinPrompt for NoPin {
+                fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                    panic!("public catalog must not prompt")
+                }
+            }
+            let native_thread = std::thread::current().id();
+            let (diagnostics, _subscriber) =
+                crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+            let desktop = DesktopController::with_certificates(diagnostics.clone(), worker_catalog);
+            let server = Server::new(
+                ServerConfig {
+                    allow_soft_tokens: false,
+                },
+                Box::new(NoPin),
+                LazyCell::new(move || {
+                    started_tx.send(std::thread::current().id()).unwrap();
+                    release_rx.recv().unwrap();
+                    Err(anyhow!("synthetic unavailable backend"))
+                }),
+                diagnostics,
+                desktop,
+            );
+            assert!(matches!(rx.try_recv(), Ok(CertificateCommand::Refresh)));
+            server.certificate_command(CertificateCommand::Refresh);
+            native_thread
+        });
+        let executing_thread = started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(catalog.snapshot().status, CatalogStatus::Busy);
+        assert_eq!(catalog.request_clear(false), Err(SelectionError::Busy));
+        release_tx.send(()).unwrap();
+        assert_eq!(worker.join().unwrap(), executing_thread);
+        assert_eq!(catalog.snapshot().status, CatalogStatus::NativeUnavailable);
+    }
+    #[test]
+    fn get_info_does_not_initialize_native_libraries() {
+        struct NoPin;
+        impl PinPrompt for NoPin {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                panic!("information does not prompt")
+            }
+        }
+        let (diagnostics, _subscriber) =
+            crate::diagnostics::subscriber("info", std::io::sink).unwrap();
+        let desktop = DesktopController::new(diagnostics.clone());
+        let server = Server::new(
+            ServerConfig {
+                allow_soft_tokens: false,
+            },
+            Box::new(NoPin),
+            LazyCell::new(|| panic!("information does not initialize NSS")),
+            diagnostics,
+            desktop,
+        );
+        assert!(matches!(server.get_info(), ResultResponse::Success(_)));
     }
     #[test]
     fn shutdown_rejects_queued_signing_before_native_initialization() {

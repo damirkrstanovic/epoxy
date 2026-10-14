@@ -35,7 +35,9 @@ async fn main() -> Result<()> {
     let _control = diagnostics::control::ControlServer::start(diagnostics.clone(), &runtime)
         .context("failed to initialize diagnostics controls")?;
 
-    let controller = desktop::DesktopController::new(diagnostics.clone());
+    let (certificates, mut certificate_rx) = epoxy::certificates::CertificateController::new();
+    let controller =
+        desktop::DesktopController::with_certificates(diagnostics.clone(), certificates.clone());
     let _lifetime = controller.service_lifetime();
     let listener = get_listener(config.endpoint).await?;
     controller.set_ready(listener.local_addr()?);
@@ -69,11 +71,11 @@ async fn main() -> Result<()> {
     };
 
     let nss_xmlsec = LazyCell::new(move || {
-        let nss = Nss::initialize(config.nssdb_path).expect("failed to initialize NSS");
+        let nss = Nss::initialize(config.nssdb_path).context("NSS initialization failed")?;
         debug!("NSS initialized");
-        let xmlsec = XmlSec::initialize().expect("failed to initialize xmlsec");
+        let xmlsec = XmlSec::initialize().context("XMLSec initialization failed")?;
         debug!("xmlsec initialized");
-        (nss, xmlsec)
+        Ok((nss, xmlsec))
     });
 
     let server_config = ServerConfig {
@@ -90,16 +92,24 @@ async fn main() -> Result<()> {
         config.max_connections,
         config.max_idle_seconds,
         listener,
-        server,
+        server.clone(),
     );
+    let catalog_server = server.clone();
+    let catalog_fut = async move {
+        while let Some(command) = certificate_rx.recv().await {
+            catalog_server.certificate_command(command);
+        }
+    };
 
     let shutdown = controller.shutdown_requested();
     let ui_exited = select! {
+        _ = catalog_fut => false,
         _ = server_fut => false,
         _ = &mut pin_method_fut => true,
         _ = shutdown.cancelled() => false,
     };
     // The service future and all native sessions have dropped before GUI completion.
+    certificates.close();
     controller.request_quit();
     drop(_control);
     #[cfg(feature = "tray")]
@@ -177,7 +187,7 @@ fn serve<'a, F>(
     server: Rc<Server<F>>,
 ) -> LocalBoxFuture<'a, ()>
 where
-    F: FnOnce() -> (Nss, XmlSec) + 'a,
+    F: FnOnce() -> Result<(Nss, XmlSec)> + 'a,
 {
     if max_idle_seconds == 0 {
         return TcpListenerStream::new(listener)
@@ -213,7 +223,7 @@ where
 
 async fn handle_conn<F>(server: Rc<Server<F>>, conn: Result<TcpStream, io::Error>)
 where
-    F: FnOnce() -> (Nss, XmlSec),
+    F: FnOnce() -> Result<(Nss, XmlSec)>,
 {
     let stream = match conn {
         Ok(stream) => stream,
