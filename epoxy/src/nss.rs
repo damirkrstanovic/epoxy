@@ -18,6 +18,8 @@ pub trait PinPrompt {
 pub struct PinInfo {
     pub cert: Option<String>,
     pub reason: String,
+    /// Portal-reported display context; never authority for authentication.
+    pub reported_site: Option<String>,
 }
 
 pub struct PinContext<'a> {

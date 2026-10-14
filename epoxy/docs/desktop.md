@@ -49,8 +49,14 @@ tray loss does not repeatedly steal focus.
 ## PIN entry and shutdown
 
 A nonempty PIN supplied by the page is used only for that request. Otherwise,
-PINs are entered in the native dialog. See [request PIN policy](request-pins.md). Purpose, certificate and token/PIN
-context labels wrap to accommodate long names. Enter or Continue submits; Escape,
+PINs are entered in a compact, fixed-size native dialog. See [request PIN policy](request-pins.md).
+The main view shows the action, website marked “reported by page”, PIN entry and Cancel/Continue.
+Certificate and PIN-context labels are in the collapsed “Certificate and card”
+section; plain bounded labels wrap, including unbroken names, and use at most two
+lines with ellipsis so long metadata cannot turn the prompt into a large window. The website comes
+from the connection's initial GET_INFO host, validated as a bounded ASCII hostname.
+It is page-reported display context, not an authenticated browser Origin or an
+authorization rule. Missing/invalid metadata shows “not provided”. Enter or Continue submits; Escape,
 Cancel and the window close button cancel. The entry is cleared when dismissed.
 No PIN cache or convenience authenticated session is added. Diagnostic controls
 remain usable while the signing thread waits for PIN entry.
@@ -107,8 +113,11 @@ compliance.
 
 A tray-only launch creates no visible tiled control window while its host is available.
 The control window opens through the tray or explicit `--show-window`; the native
-PIN prompt still appears when authentication requires it. Placement of these windows
-belongs to the compositor. To float Epoxy windows when they are actually opened,
+PIN prompt appears when authentication requires it and the request has no PIN.
+It is fixed-size so niri's automatic floating rule can treat it as a dialog, including
+tray-only mode with no visible parent. New floating windows center by default;
+actual placement belongs to the compositor and user window rules can override it.
+See [Niri floating windows](https://niri-wm.github.io/niri/Floating-Windows.html). To float Epoxy windows when they are actually opened,
 Niri supports this optional app-specific rule:
 
 ```kdl
