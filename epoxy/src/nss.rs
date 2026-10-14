@@ -10,8 +10,10 @@ use thiserror::Error;
 use tracing::{debug, error, warn};
 use xmlsec_nss_sys::*;
 
+use crate::pin::SecretPin;
+
 pub trait PinPrompt {
-    fn prompt_pin(&self, pin_info: &PinInfo, token_name: String) -> Option<String>;
+    fn prompt_pin(&self, pin_info: &PinInfo, token_name: String) -> Option<SecretPin>;
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +36,32 @@ impl<'a> PinContext<'a> {
             pin_info,
         }
     }
+}
+
+// Allocates a password buffer whose ownership transfers to NSS on return.
+fn pin_to_nss(pin: SecretPin) -> *mut c_char {
+    if !pin.is_valid() {
+        return null_mut();
+    }
+    let pin_buf = pin.expose().as_bytes();
+    let out_buf_ptr = unsafe { PORT_Alloc(pin_buf.len() + 1) } as *mut c_char;
+    if out_buf_ptr.is_null() {
+        return null_mut();
+    }
+    unsafe {
+        ptr::copy_nonoverlapping(
+            pin_buf.as_ptr().cast::<c_char>(),
+            out_buf_ptr,
+            pin_buf.len(),
+        );
+        *out_buf_ptr.add(pin_buf.len()) = 0;
+    }
+    // No intermediate CString copy. Wipe our allocation before handing off.
+    // NSS owns the returned buffer; its normal authentication path clears
+    // it before PORT_Free. Never retain or touch that pointer after return.
+    drop(pin);
+
+    out_buf_ptr
 }
 
 pub struct Nss {
@@ -97,16 +125,7 @@ impl Nss {
             return null_mut();
         };
 
-        let pin = CString::new(pin).unwrap_or_default();
-        let pin_buf = pin.as_bytes_with_nul();
-        let in_buf_ptr = pin_buf.as_ptr().cast::<c_char>();
-        let out_buf_ptr = unsafe { PORT_Alloc(pin_buf.len()) } as *mut c_char;
-        if out_buf_ptr.is_null() {
-            return null_mut();
-        }
-        unsafe { ptr::copy_nonoverlapping(in_buf_ptr, out_buf_ptr, pin_buf.len()) };
-
-        out_buf_ptr
+        pin_to_nss(pin)
     }
 
     pub fn get_tokens<'a>(&'a self) -> Option<TokenList<'a>> {
@@ -623,5 +642,24 @@ mod native_tests {
             unsafe { NSS_ShutdownContext(nss.ptr) },
             _SECStatus_SECSuccess
         );
+    }
+}
+
+#[cfg(test)]
+mod pin_buffer_tests {
+    use super::*;
+    #[test]
+    fn native_pin_handoff_is_terminated_and_rejects_invalid_values() {
+        for secret in ["synthetic\0secret".to_string(), "s".repeat(1025)] {
+            assert!(pin_to_nss(secret.into()).is_null());
+        }
+        let pointer = pin_to_nss("synthetic-secret".into());
+        assert!(!pointer.is_null());
+        unsafe {
+            // This test owns the buffer; it has never been passed to NSS.
+            let text = CStr::from_ptr(pointer);
+            assert_eq!(text.to_bytes(), b"synthetic-secret");
+            PORT_ZFree(pointer.cast(), text.to_bytes_with_nul().len());
+        }
     }
 }

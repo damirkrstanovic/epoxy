@@ -25,3 +25,7 @@ during a live request.
 Tests cover both request schemas, redacted Debug, supplied/empty credential routing,
 one-use behavior and absence of reuse across requests. Native/portal acceptance
 remains user-operated; synthetic tests do not use the user's card or PIN.
+
+Application-owned PIN buffers are zeroized on release, including cancellation and
+validation failure. See [PIN memory lifetime](pin-memory.md) for coverage and
+external-library limitations; no PIN caching is added.

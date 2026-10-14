@@ -1,4 +1,26 @@
 use serde_json::{Map, Value, json};
+use zeroize::Zeroize;
+
+// JSON values may contain credentials even when the final output is masked.
+struct SensitiveJson(Value);
+impl Drop for SensitiveJson {
+    fn drop(&mut self) {
+        wipe_json(&mut self.0);
+    }
+}
+fn wipe_json(value: &mut Value) {
+    match std::mem::take(value) {
+        Value::String(mut text) => text.zeroize(),
+        Value::Object(fields) => {
+            for (mut key, mut value) in fields {
+                key.zeroize();
+                wipe_json(&mut value);
+            }
+        }
+        Value::Array(mut items) => items.iter_mut().for_each(wipe_json),
+        _ => {}
+    }
+}
 
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024;
@@ -12,11 +34,13 @@ pub fn masked_wire(text: &str) -> Value {
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return json!({"trace_omitted": "invalid_json", "bytes": text.len()});
     };
+    let input = SensitiveJson(value);
     let mut remaining = MAX_NODES;
-    if !within_budget(&value, 0, &mut remaining) {
+    if !within_budget(&input.0, 0, &mut remaining) {
         return json!({"trace_omitted": "budget_exceeded", "bytes": text.len()});
     }
-    let value = sanitize(value);
+    let value = sanitize(&input.0);
+    drop(input);
     if value.to_string().len() > MAX_OUTPUT_BYTES {
         return json!({"trace_omitted": "output_too_large"});
     }
@@ -118,7 +142,7 @@ fn rule(shape: Shape, key: &str) -> Option<Rule> {
     }
 }
 
-fn sanitize(value: Value) -> Value {
+fn sanitize(value: &Value) -> Value {
     let Some(fields) = value.as_object() else {
         return json!({"trace_omitted": "unsupported_shape"});
     };
@@ -144,14 +168,14 @@ fn sanitize(value: Value) -> Value {
     )
 }
 
-fn sanitize_object(value: Value, shape: Shape) -> Value {
+fn sanitize_object(value: &Value, shape: Shape) -> Value {
     let Value::Object(fields) = value else {
         return json!("[MASKED]");
     };
     let mut result = Map::new();
     let mut unknown = 0;
     for (key, value) in fields {
-        let safe = match rule(shape, &key) {
+        let safe = match rule(shape, key) {
             Some(Rule::Operation) => value
                 .as_str()
                 .and_then(known_operation)
@@ -172,7 +196,7 @@ fn sanitize_object(value: Value, shape: Shape) -> Value {
             Some(Rule::Array(child)) => match value {
                 Value::Array(items) => Value::Array(
                     items
-                        .into_iter()
+                        .iter()
                         .map(|item| sanitize_object(item, child))
                         .collect(),
                 ),
@@ -183,7 +207,7 @@ fn sanitize_object(value: Value, shape: Shape) -> Value {
                 continue;
             }
         };
-        result.insert(key, safe);
+        result.insert(key.clone(), safe);
     }
     if unknown > 0 {
         result.insert("_masked_fields".into(), json!(unknown));
