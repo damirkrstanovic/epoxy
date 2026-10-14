@@ -16,8 +16,10 @@ Host changes are checked without cached properties; transient registration rejec
 also enters the retry path, even when watcher ownership does not change.
 
 Tray activation opens the host-rendered tray menu, without mapping a control
-window. Its menu provides service status, “Enable troubleshooting logs (5 minutes)”,
-“Disable troubleshooting logs” and Quit. Troubleshooting request logs mask sensitive
+window. The top-level order is service status, Cards and certificates,
+“Enable troubleshooting logs (5 minutes)”, “Disable troubleshooting logs”, then
+Advanced. Advanced contains diagnostics, the checked automatic certificate-selection
+mode, technical context details and Quit Epoxy. Troubleshooting request logs mask sensitive
 data and automatically return to normal logging after five minutes. Advanced diagnostics opens the optional GTK window
 only on explicit selection. The window has a visible Hide window button when a
 tray is available, plus keyboard/window-close dismissal; Quit is a separate action. The tray
@@ -29,6 +31,16 @@ ARGB pixmaps without a theme-dependent icon name. This avoids hosts displaying a
 unrecolored dark symbolic icon on a dark panel. A desktop
 must supply a StatusNotifierItem host to display it; Epoxy does not install or
 configure shell extensions or bars.
+
+Tray popup dismissal and focus restoration belong to the tray host. In
+DankMaterialShell, activating a leaf action starts an 80 ms timer that closes the
+popup, returning focus to the previously focused window. Epoxy's certificate and
+logging actions do not request a GTK window or change window focus. The standard
+tray menu protocol provides no keep-open control. See the
+[DMS tray implementation](https://github.com/AvengeMedia/DankMaterialShell/blob/master/quickshell/Modules/DBar/Widgets/SystemTrayBar.qml).
+
+There is currently no separate Stop/Start service control. Quit Epoxy shuts down
+both the listener and the tray; launch Epoxy again to restart it.
 
 Closing the control window hides it when the tray is available. Without a tray,
 closing it requests Quit. Tray recovery does not hide an open window. Repeated

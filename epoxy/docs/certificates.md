@@ -25,8 +25,10 @@ and contentCommitment requirements; it does not establish trust/legal qualificat
 
 An existing explicit/remembered choice takes priority. If the selected identity
 disappears or becomes invalid/ambiguous, Epoxy never substitutes a different card.
-Advanced → **Choose automatically** explicitly forgets the preference and returns
-to automatic selection. Automatic choices make no preference writes. Remembered
+The top-level Advanced → **Choose automatically** uses a standard tray checkmark:
+it is checked in automatic mode and unchecked after **Use this certificate**.
+Choosing it while unchecked explicitly forgets the preference and returns to
+automatic selection; choosing it while already checked leaves the mode unchanged. Automatic choices make no preference writes. Remembered
 selection stores only nonsecret identity; no PIN is saved or cached.
 
 Reload the portal after changing certificates; previous aliases are invalidated.

@@ -28,6 +28,7 @@ pub struct CertificateSnapshot {
     pub revision: u64,
     pub selected: Option<CertificateKey>,
     pub remembered: bool,
+    pub automatic: bool,
     pub status: CatalogStatus,
     pub error: Option<SelectionError>,
 }
@@ -40,6 +41,7 @@ struct State {
     busy: bool,
     closed: bool,
     remembered: bool,
+    automatic: bool,
 }
 #[derive(Clone)]
 pub struct CertificateController {
@@ -61,6 +63,7 @@ impl CertificateController {
                     busy: false,
                     closed: false,
                     remembered: false,
+                    automatic: true,
                 })),
             },
             rx,
@@ -74,6 +77,7 @@ impl CertificateController {
             revision: s.model.revision(),
             selected: s.model.selected_key().cloned(),
             remembered: s.remembered,
+            automatic: s.automatic,
             status: if s.busy {
                 CatalogStatus::Busy
             } else {
@@ -152,6 +156,7 @@ impl CertificateController {
                 .collect(),
         );
         if automatic
+            && s.automatic
             && s.model.selected_key().is_none()
             && let Some(key) = default_signing_certificate(&contexts)
         {
@@ -184,6 +189,7 @@ impl CertificateController {
     }
     pub fn commit_selection(&self, key: Option<CertificateKey>, remembered: bool) {
         let mut s = self.state.lock().unwrap();
+        s.automatic = key.is_none();
         s.model.set_selection(key);
         s.remembered = remembered;
     }
@@ -205,6 +211,7 @@ impl CertificateController {
         }
         s.model.set_selection(Some(key));
         s.remembered = remember;
+        s.automatic = false;
         Ok(())
     }
     pub fn clear_choice(
@@ -222,6 +229,7 @@ impl CertificateController {
         let automatic = default_signing_certificate(&s.contexts);
         s.model.set_selection(automatic);
         s.remembered = false;
+        s.automatic = true;
         Ok(())
     }
     pub fn native_operation(&self) -> NativeOperation {

@@ -195,3 +195,34 @@ RED→GREEN evidence: automatic default/no fallback, ambiguity/ineligibility, pe
 name extraction without embedded CN identifier, single-level remembered menu action,
 stale/Busy controls, and failed explicit save without implicit selection. GTK checks
 cover the single remembered action, collapsed Advanced and Details Close/Escape.
+
+
+### Tray controls follow-up — 2026-10-14
+
+User reported leaf actions returning focus to the launch terminal, no checked
+automatic-mode indicator, and an inconvenient top-level order. Their host is
+DankMaterialShell (installed dms-shell 1.6.2-1). Inspection of current official DMS
+SystemTrayBar.qml shows leaf activation starts pendingActionCloseTimer (80 ms),
+which calls trayMenuState.close(). This explains the popup dismissal; it is a host
+policy, not an Epoxy window presentation request. Installed-version source was not
+available locally, and no user's desktop configuration was changed. No standard
+tray keep-open property was identified; host-specific focus/reopening hacks were
+not added. Source: https://github.com/AvengeMedia/DankMaterialShell/blob/master/quickshell/Modules/DBar/Widgets/SystemTrayBar.qml
+
+Root order is now status, Cards and certificates, Enable troubleshooting logs,
+Disable troubleshooting logs, Advanced. Advanced contains diagnostics, certificate
+options/context details and Quit Epoxy. Choose automatically is a standard ksni
+CheckmarkItem backed by explicit automatic-mode state, independent of whether a
+manual preference is persisted. Reset returns to automatic mode; clicking already
+checked is a no-op. Use this certificate clears the mode tick. No listener stop/start
+feature was added: Quit still exits both tray and service.
+
+Meaningful red/green regressions cover mode state and root menu order/actions.
+Fresh validation: default68/CLI61/GTK63 automatic tests pass, application Clippy
+passes all three builds, fmt/diff checks pass, all seven private GTK/bus checks and
+three readiness/shutdown smoke scenarios pass. Local certificate binary rebuilt.
+No real card/PIN/signing or host tray interaction was run. DMS popup closure remains
+a host limitation; actual standard checkmark rendering is for user desktop QA.
+
+Independent bounded-diff review found no Critical, Important or Minor findings;
+confirmed ksni serializes CheckmarkItem as the standard checkmark toggle type.

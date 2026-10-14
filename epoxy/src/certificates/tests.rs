@@ -270,3 +270,23 @@ fn person_name_is_shown_without_the_certificates_common_name_identifier() {
     .unwrap();
     assert_eq!(certificate.holder, "Željko Test");
 }
+#[test]
+fn automatic_mode_tracks_choices_independently_of_whether_they_are_saved() {
+    let (controller, _) = CertificateController::new();
+    let context = signing_context(b"a", 1);
+    controller.publish(vec![context.clone()]);
+    assert!(controller.snapshot().automatic);
+    let store = PreferenceStore::new("/synthetic/unused/preference.json".into());
+    controller
+        .commit_choice(context.certificates[0].key.clone(), false, &store)
+        .unwrap();
+    assert!(
+        !controller.snapshot().automatic,
+        "even an unsaved explicit choice is manual"
+    );
+    assert!(!controller.snapshot().remembered);
+    controller.clear_choice(false, &store).unwrap();
+    assert!(controller.snapshot().automatic);
+    controller.publish(vec![]);
+    assert!(controller.snapshot().automatic);
+}

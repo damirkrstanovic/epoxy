@@ -1,7 +1,7 @@
 use crate::certificates::*;
 use ksni::{
     MenuItem,
-    menu::{StandardItem, SubMenu},
+    menu::{CheckmarkItem, StandardItem, SubMenu},
 };
 fn menu_text(text: &str) -> String {
     display_text(text, 160).replace('_', "__")
@@ -120,13 +120,26 @@ pub(super) fn build<T: 'static>(controller: &CertificateController) -> Vec<MenuI
         }
         .into(),
     );
+    menu
+}
+
+pub(super) fn advanced<T: 'static>(controller: &CertificateController) -> Vec<MenuItem<T>> {
+    let snapshot = controller.snapshot();
+    let enabled = !matches!(
+        snapshot.status,
+        CatalogStatus::Busy | CatalogStatus::Loading
+    );
+    let contexts = &snapshot.contexts;
     let clear = controller.clone();
     let mut advanced = vec![
-        StandardItem {
+        CheckmarkItem {
             label: "Choose automatically".into(),
+            checked: snapshot.automatic,
             enabled,
             activate: Box::new(move |_| {
-                let _ = clear.request_clear(true);
+                if !clear.snapshot().automatic {
+                    let _ = clear.request_clear(true);
+                }
             }),
             ..Default::default()
         }
@@ -148,15 +161,7 @@ pub(super) fn build<T: 'static>(controller: &CertificateController) -> Vec<MenuI
             .into(),
         );
     }
-    menu.push(
-        SubMenu {
-            label: "Advanced".into(),
-            submenu: advanced,
-            ..Default::default()
-        }
-        .into(),
-    );
-    menu
+    advanced
 }
 
 #[cfg(test)]
@@ -248,11 +253,29 @@ mod tests {
             _ => panic!("selection expected"),
         }
         controller.finish(Ok(()));
-        (action(&menu, "Choose automatically").activate)(&mut ());
+        controller.commit_selection(Some(key.clone()), false);
+        let options = advanced::<()>(&controller);
+        let MenuItem::Checkmark(item) = &options[0] else {
+            panic!("standard checked mode item expected")
+        };
+        assert!(!item.checked);
+        (item.activate)(&mut ());
         assert!(matches!(
             rx.try_recv(),
             Ok(CertificateCommand::Clear { forget_saved: true })
         ));
+        controller
+            .clear_choice(
+                false,
+                &PreferenceStore::new("/synthetic/unused/preference.json".into()),
+            )
+            .unwrap();
+        controller.finish(Ok(()));
+        let options = advanced::<()>(&controller);
+        let MenuItem::Checkmark(item) = &options[0] else {
+            panic!("standard checked mode item expected")
+        };
+        assert!(item.checked);
     }
     #[test]
     fn old_menu_actions_cannot_select_after_refresh_or_during_pin_wait() {

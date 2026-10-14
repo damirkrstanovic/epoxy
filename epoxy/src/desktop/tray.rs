@@ -65,13 +65,7 @@ impl Tray for EpoxyTray {
     }
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let status = self.controller.diagnostics().status().ok();
-        let mut menu = vec![
-            StandardItem {
-                label: status_label(self.controller.snapshot().activity).into(),
-                enabled: false,
-                ..Default::default()
-            }
-            .into(),
+        let mut advanced = vec![
             StandardItem {
                 label: "Advanced diagnostics…".into(),
                 activate: Box::new(|tray: &mut Self| tray.ui.show_window()),
@@ -79,6 +73,32 @@ impl Tray for EpoxyTray {
             }
             .into(),
             MenuItem::Separator,
+        ];
+        advanced.extend(super::certificate_menu::advanced(
+            self.controller.certificates(),
+        ));
+        advanced.push(MenuItem::Separator);
+        advanced.push(
+            StandardItem {
+                label: "Quit Epoxy".into(),
+                activate: Box::new(|tray: &mut Self| tray.controller.request_quit()),
+                ..Default::default()
+            }
+            .into(),
+        );
+        vec![
+            StandardItem {
+                label: status_label(self.controller.snapshot().activity).into(),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            ksni::menu::SubMenu {
+                label: "Cards and certificates".into(),
+                submenu: super::certificate_menu::build(self.controller.certificates()),
+                ..Default::default()
+            }
+            .into(),
             StandardItem {
                 label: "Enable troubleshooting logs (5 minutes)".into(),
                 activate: Box::new(|tray: &mut Self| {
@@ -111,24 +131,13 @@ impl Tray for EpoxyTray {
                 ..Default::default()
             }
             .into(),
-            MenuItem::Separator,
-            StandardItem {
-                label: "Quit Epoxy".into(),
-                activate: Box::new(|tray: &mut Self| tray.controller.request_quit()),
-                ..Default::default()
-            }
-            .into(),
-        ];
-        menu.insert(
-            2,
             ksni::menu::SubMenu {
-                label: "Cards and certificates".into(),
-                submenu: super::certificate_menu::build(self.controller.certificates()),
+                label: "Advanced".into(),
+                submenu: advanced,
                 ..Default::default()
             }
             .into(),
-        );
-        menu
+        ]
     }
 }
 fn status_label(activity: Activity) -> &'static str {
@@ -179,8 +188,42 @@ mod tests {
             }
         }
     }
+    fn standard_action<'a>(
+        menu: &'a [MenuItem<EpoxyTray>],
+        label: &str,
+    ) -> &'a StandardItem<EpoxyTray> {
+        for item in menu {
+            match item {
+                MenuItem::Standard(s) if s.label == label => return s,
+                MenuItem::SubMenu(s) => {
+                    if let Some(found) = find_action(&s.submenu, label) {
+                        return found;
+                    }
+                }
+                _ => (),
+            }
+        }
+        panic!("missing action {label}")
+    }
+    fn find_action<'a>(
+        menu: &'a [MenuItem<EpoxyTray>],
+        label: &str,
+    ) -> Option<&'a StandardItem<EpoxyTray>> {
+        for item in menu {
+            match item {
+                MenuItem::Standard(s) if s.label == label => return Some(s),
+                MenuItem::SubMenu(s) => {
+                    if let Some(found) = find_action(&s.submenu, label) {
+                        return Some(found);
+                    }
+                }
+                _ => (),
+            }
+        }
+        None
+    }
     #[test]
-    fn tray_actions_control_existing_diagnostics_and_presentation() {
+    fn tray_actions_keep_logs_at_top_and_windows_and_quit_in_advanced() {
         let (diagnostics, _subscriber) =
             crate::diagnostics::subscriber("warn", std::io::sink).unwrap();
         let controller = DesktopController::new(diagnostics);
@@ -191,38 +234,48 @@ mod tests {
             registered: Arc::new(AtomicBool::new(true)),
         };
         let menu = tray.menu();
-        let activate = |menu: &Vec<MenuItem<EpoxyTray>>, index: usize, tray: &mut EpoxyTray| {
-            if let MenuItem::Standard(item) = &menu[index] {
-                (item.activate)(tray);
-            } else {
-                panic!("expected action");
-            }
-        };
-        activate(&menu, 1, &mut tray);
-        assert_eq!(rx.try_recv().unwrap(), ());
-        activate(&menu, 4, &mut tray);
-        let status = controller.diagnostics().status().unwrap();
-        assert!(status.requests_masked);
-        assert!(status.expires_in_seconds.unwrap() <= 300);
-        activate(&menu, 5, &mut tray);
+        let labels: Vec<_> = menu
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Standard(s) => Some(s.label.as_str()),
+                MenuItem::SubMenu(s) => Some(s.label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Starting",
+                "Cards and certificates",
+                "Enable troubleshooting logs (5 minutes)",
+                "Disable troubleshooting logs",
+                "Advanced"
+            ]
+        );
+        (standard_action(&menu, "Enable troubleshooting logs (5 minutes)").activate)(&mut tray);
+        assert!(controller.diagnostics().status().unwrap().requests_masked);
+        assert!(
+            rx.try_recv().is_err(),
+            "ordinary tray changes must not present a GTK window"
+        );
+        (standard_action(&menu, "Disable troubleshooting logs").activate)(&mut tray);
         assert_eq!(controller.diagnostics().status().unwrap().filter, "warn");
+        assert!(rx.try_recv().is_err());
+        (standard_action(&menu, "Advanced diagnostics…").activate)(&mut tray);
+        assert_eq!(rx.try_recv().unwrap(), ());
+        let menu = tray.menu();
+        assert!(!standard_action(&menu, "Disable troubleshooting logs").enabled);
         controller
             .diagnostics()
             .enable(crate::diagnostics::Level::Debug, false, 1)
             .unwrap();
-        let menu = tray.menu();
-        if let MenuItem::Standard(item) = &menu[5] {
-            assert!(item.enabled);
-        }
+        assert!(standard_action(&tray.menu(), "Disable troubleshooting logs").enabled);
         controller
             .diagnostics()
             .expire(std::time::Instant::now() + std::time::Duration::from_secs(2))
             .unwrap();
-        let menu = tray.menu();
-        if let MenuItem::Standard(item) = &menu[5] {
-            assert!(!item.enabled);
-        }
-        activate(&menu, 7, &mut tray);
+        assert!(!standard_action(&tray.menu(), "Disable troubleshooting logs").enabled);
+        (standard_action(&menu, "Quit Epoxy").activate)(&mut tray);
         assert!(controller.shutdown_requested().is_cancelled());
     }
 }
