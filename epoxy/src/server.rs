@@ -703,6 +703,9 @@ where
     fn parse_xml(&self, xml: Vec<u8>) -> Result<Document, XmlParseError> {
         let opts = ParserOptions {
             recover: false,
+            // Portal documents must not cause network resource loading.
+            // Entity substitution and DTD loading remain disabled by default.
+            no_net: true,
             ..Default::default()
         };
         self.xml_parser.parse_string_with_options(xml, opts)
