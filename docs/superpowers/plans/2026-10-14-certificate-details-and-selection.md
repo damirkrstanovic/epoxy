@@ -226,3 +226,30 @@ a host limitation; actual standard checkmark rendering is for user desktop QA.
 
 Independent bounded-diff review found no Critical, Important or Minor findings;
 confirmed ksni serializes CheckmarkItem as the standard checkmark toggle type.
+
+### Automatic desktop discovery — 2026-10-14
+
+User expects an already inserted token to appear without manual Refresh. Root cause:
+startup constructs an unscanned controller and never queues a catalog request; only
+Refresh and portal GET_TERMINALS discover public certificates. Desktop mode now
+queues one existing Refresh after listener readiness, executing on the same native
+thread via the serialized dispatcher. The catalog future yields before processing.
+GTK remains independent; no new native threads, authentication/PIN requests or
+convenience sessions are introduced. CLI remains lazy. Manual/remembered choices
+retain priority because the existing publish rules are unchanged. Later card changes
+still use Refresh/portal discovery; continuous hotplug watching is not added.
+
+The real-process private desktop smoke regression was red on the previous binary
+(no unrequested scan) and green after the change (exactly one public Refresh after
+listener readiness). It uses an absent synthetic NSS DB and verifies backend
+failure leaves GET_INFO, diagnostics and clean shutdown working. Readiness measured
+32–73 ms and handshake 34–79 ms in these three synthetic runs, not actual ESS cold
+initialization. Synchronous native backend calls can delay protocol processing while
+they execute; listener/GTK readiness does not wait for discovery.
+
+Fresh default68/CLI61/GTK63 automatic suites, application Clippy all configurations,
+fmt/diff, seven private GTK/bus checks and three smoke scenarios pass. Local binary
+rebuilt. No user's card, PIN, signing request or session bus was accessed.
+
+Independent bounded startup review found no Critical, Important or Minor issues;
+checked native serialization, authentication-free discovery and shutdown ordering.

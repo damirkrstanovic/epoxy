@@ -105,7 +105,17 @@ async fn main() -> Result<()> {
     );
     let catalog_server = server.clone();
     drop(server);
+    if gui {
+        // Discover an already connected card without requiring Refresh. The
+        // listener is ready and GTK runs independently; native work still uses
+        // the same serialized dispatcher as later refresh/portal requests.
+        certificates
+            .request_refresh()
+            .context("failed to queue initial public certificate discovery")?;
+    }
     let catalog_fut = async move {
+        // Let the other service futures be polled before native discovery.
+        tokio::task::yield_now().await;
         while let Some(command) = certificate_rx.recv().await {
             catalog_server.certificate_command(command);
         }

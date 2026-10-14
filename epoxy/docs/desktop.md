@@ -92,7 +92,9 @@ never the user's session bus, card, PIN or tax data. The six ignored GUI/bus tes
 are run explicitly by that script, not silently treated as covered by `cargo test`.
 The daemon restart test owns a separate temporary bus. The helper smoke test
 checks GET_INFO, dynamic masked tracing/expiry, listener readiness, GUI presentation
-and clean SIGTERM/socket removal without loading NSS.
+and clean SIGTERM/socket removal. It also checks that desktop startup attempts
+exactly one automatic public-certificate scan after listener readiness, using an
+absent synthetic NSS database; backend failure does not stop GET_INFO or diagnostics.
 
 User desktop QA still needs the actual Wayland/X11 desktop and tray host: Open
 Epoxy, diagnostics toggles/expiry, status during PIN entry, cancellation, Quit and

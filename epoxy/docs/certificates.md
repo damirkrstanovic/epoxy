@@ -1,7 +1,10 @@
 # Cards, certificates and signing contexts
 
-Open **Cards and certificates** from the tray, then choose **Refresh**. Opening
-this menu does not access the card. Refresh reads public certificate metadata
+Desktop mode automatically scans public certificates once after the listener is
+ready, so an already connected card appears under **Cards and certificates**.
+The scan uses the existing serialized native dispatcher and never requests a PIN.
+Opening the menu does not start an additional scan. Use **Refresh** after a card
+change or to retry discovery. Both startup discovery and Refresh read public metadata
 without authentication, regardless of NSS’s friendly configuration hint. A context
 that hides its certificates behind login is
 shown as requiring authentication; it can still be chosen through the portal's
@@ -32,8 +35,12 @@ automatic selection; choosing it while already checked leaves the mode unchanged
 selection stores only nonsecret identity; no PIN is saved or cached.
 
 Reload the portal after changing certificates; previous aliases are invalidated.
-Startup and GET_INFO remain lazy: automatic selection runs on discovery, not during
-startup. While card work or PIN entry is active, controls report Busy.
+GET_INFO does not initiate card discovery. Desktop startup now performs one public
+scan; terminal-only operation retains lazy discovery through portal requests.
+Listener readiness and GTK presentation do not wait for the scan, but native card
+calls are synchronous on the serialized service thread: a slow backend can delay
+protocol processing until it returns. While card work or PIN entry is active,
+controls report Busy.
 
 GTK fallback provides the same compact certificate list, **Use this certificate**,
 **Certificate details…**, Refresh and collapsed Advanced controls. Close/Escape
