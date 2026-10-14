@@ -53,7 +53,7 @@ Only Linux systems are currently supported.
 - `libnss3`
 - `libxml2`
 - `libxmlsec1`
-- `gtk4` (for `ui-gtk` feature)
+- `gtk4` 4.4 or newer (for `ui-gtk` / default tray builds)
 
 ### Install PKCS#11 module
 
@@ -136,6 +136,10 @@ See [runtime diagnostics](epoxy/docs/diagnostics.md) for masking, expiry, the
 required private `XDG_RUNTIME_DIR`, and troubleshooting.
 
 ## Security and licensing
+
+Epoxy disables ordinary core dumps/debug attachment at startup and wipes its
+owned PIN buffers after use or cancellation. See [process protection](epoxy/docs/process-protection.md)
+and [PIN memory lifetime and limits](epoxy/docs/pin-memory.md).
 
 See the [security review and trust boundaries](epoxy/docs/security-review.md)
 and [third-party licensing / distribution obligations](THIRD_PARTY.md).

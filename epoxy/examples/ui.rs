@@ -21,8 +21,8 @@ async fn main() -> Result<(), Error> {
 
     let pin = pin_prompt.prompt_pin(&pin_info, token_name);
 
-    let masked_pin = pin.map(|p| str::repeat("*", p.len()));
-    info!("received PIN: {:?}", masked_pin);
+    info!(pin_received = pin.is_some(), "PIN prompt finished");
+    drop(pin);
 
     pin_method_ct.cancel();
     pin_method_fut.await;

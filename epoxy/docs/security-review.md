@@ -44,10 +44,13 @@ inspection. Synthetic tests do not use a real token, real PIN or tax account.
   A local process can forge it. Same-user processes, the approved portal's own
   scripts, the desktop session and native libraries are trusted by this design.
   The displayed GET_INFO host is a page claim, not proof of the requester's identity.
-- Page PINs are used once per request, without application PIN caching. However,
-  ordinary Rust/GTK/JSON/C/NSS buffers are not guaranteed to be zeroized. No
-  memory-forensics or swap/core-dump resistance is claimed. A future zeroization
-  change must cover the whole path, not just wrap one String.
+- Page PINs are used once per request, without application PIN caching. Subsequent
+  [PIN-memory hardening](pin-memory.md) wipes application-owned PIN allocations,
+  clears queued replies and reduces intermediate copies. Shared transport,
+  parser, GTK and native-library internals still prevent a whole-process erasure
+  guarantee. [Process protection](process-protection.md) now disables ordinary
+  core dumps and unprivileged debug attachment at startup; it is not swap
+  protection or a boundary against privileged/launch-time compromise.
 - A page-supplied PIN bypasses the native prompt as explicitly configured by the
   user-facing policy. Approved or compromised portal code can therefore request
   signing without an additional native confirmation. This is not a document

@@ -8,7 +8,7 @@ mod tests;
 use crate::{
     desktop::{DesktopController, TrayAvailability},
     nss::{PinInfo, PinPrompt},
-    pin::PinMethod,
+    pin::{PinMethod, SecretPin},
 };
 use control_window::ControlWindow;
 use futures::FutureExt;
@@ -22,7 +22,7 @@ use std::{
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-type PinReply = oneshot::Sender<Option<String>>;
+type PinReply = oneshot::Sender<Option<SecretPin>>;
 type PinChannelMessage = (PinInfo, String, PinReply);
 #[derive(Clone)]
 pub struct UiHandle {
@@ -77,7 +77,7 @@ struct UiPrompt {
     controller: DesktopController,
 }
 impl PinPrompt for UiPrompt {
-    fn prompt_pin(&self, info: &PinInfo, token: String) -> Option<String> {
+    fn prompt_pin(&self, info: &PinInfo, token: String) -> Option<SecretPin> {
         if self.controller.shutdown_requested().is_cancelled() {
             return None;
         }

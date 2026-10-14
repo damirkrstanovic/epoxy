@@ -56,6 +56,26 @@ impl TryFrom<Response> for Message {
     }
 }
 
+// WebSocket Bytes can share allocations with the transport. Scrub only when
+// exclusive ownership can be acquired safely; never write through shared Bytes.
+struct IncomingText(Option<Utf8Bytes>);
+impl IncomingText {
+    fn text(&self) -> &str {
+        self.0.as_ref().expect("owned incoming text")
+    }
+}
+impl Drop for IncomingText {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        if let Some(text) = self.0.take() {
+            let bytes = tungstenite::Bytes::from(text);
+            if let Ok(mut bytes) = bytes.try_into_mut() {
+                bytes.as_mut().zeroize();
+            }
+        }
+    }
+}
+
 impl TryFrom<Message> for Request {
     type Error = Error;
 
@@ -64,7 +84,8 @@ impl TryFrom<Message> for Request {
             .into_text()
             .context("failed to convert WebSocket message to text")?;
 
-        parse_request(&text)
+        let text = IncomingText(Some(text));
+        parse_request(text.text())
     }
 }
 
@@ -243,8 +264,9 @@ where
                     context.set((correlation_id, Instant::now()));
                     let request = match message {
                         Message::Text(text) => {
-                            request_diagnostics.wire("request", &text, correlation_id);
-                            parse_request(&text)
+                            let text = IncomingText(Some(text));
+                            request_diagnostics.wire("request", text.text(), correlation_id);
+                            parse_request(text.text())
                         }
                         _ => Err(anyhow!("invalid WebSocket text message")),
                     };
@@ -793,7 +815,7 @@ mod tests {
         let worker = std::thread::spawn(move || {
             struct NoPin;
             impl PinPrompt for NoPin {
-                fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+                fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<epoxy::pin::SecretPin> {
                     panic!("public catalog must not prompt")
                 }
             }
@@ -852,7 +874,7 @@ mod tests {
     fn page_pin_reaches_request_prompt_without_becoming_debug_output() {
         struct NoNative;
         impl PinPrompt for NoNative {
-            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<epoxy::pin::SecretPin> {
                 panic!("supplied PIN must not open native prompt")
             }
         }
@@ -874,17 +896,19 @@ mod tests {
                 reported_site: None,
             };
             assert_eq!(
-                prompt.prompt_pin(&info, "token".into()),
+                prompt
+                    .prompt_pin(&info, "token".into())
+                    .map(|pin| pin.expose().to_owned()),
                 Some("synthetic-page-pin".into())
             );
-            assert_eq!(prompt.prompt_pin(&info, "token".into()), None);
+            assert!(prompt.prompt_pin(&info, "token".into()).is_none());
         }
     }
     #[test]
     fn changed_selection_rejects_a_real_session_alias_before_any_pin() {
         struct NoPin;
         impl PinPrompt for NoPin {
-            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<epoxy::pin::SecretPin> {
                 panic!("stale alias must not prompt")
             }
         }
@@ -937,7 +961,7 @@ mod tests {
     fn get_info_does_not_initialize_native_libraries() {
         struct NoPin;
         impl PinPrompt for NoPin {
-            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<epoxy::pin::SecretPin> {
                 panic!("information does not prompt")
             }
         }
@@ -960,7 +984,7 @@ mod tests {
     fn shutdown_rejects_queued_signing_before_native_initialization() {
         struct NoPin;
         impl PinPrompt for NoPin {
-            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<epoxy::pin::SecretPin> {
                 panic!("cancelled work must not prompt")
             }
         }
@@ -1032,7 +1056,7 @@ mod tests {
     fn websocket_flow_toggles_masked_tracing_without_loading_nss() {
         struct NoPin;
         impl PinPrompt for NoPin {
-            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<epoxy::pin::SecretPin> {
                 panic!("this protocol test must not request a PIN")
             }
         }
@@ -1109,7 +1133,7 @@ mod clear_without_native_tests {
     fn clearing_a_session_choice_does_not_require_an_available_native_backend() {
         struct NoPin;
         impl PinPrompt for NoPin {
-            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<epoxy::pin::SecretPin> {
                 panic!("clear does not prompt")
             }
         }
@@ -1149,7 +1173,7 @@ mod network_deadline_tests {
     fn server() -> Server<impl FnOnce() -> Result<(Nss, XmlSec)>> {
         struct NoPin;
         impl PinPrompt for NoPin {
-            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+            fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<epoxy::pin::SecretPin> {
                 panic!("network test must not request a PIN")
             }
         }
