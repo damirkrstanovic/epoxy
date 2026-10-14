@@ -12,3 +12,5 @@ pub mod desktop;
 pub mod certificates;
 
 pub mod browser;
+
+pub mod process_protection;
