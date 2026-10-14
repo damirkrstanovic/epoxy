@@ -10,3 +10,5 @@ pub mod diagnostics;
 pub mod desktop;
 
 pub mod certificates;
+
+pub mod browser;

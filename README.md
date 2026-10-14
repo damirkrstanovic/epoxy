@@ -112,6 +112,12 @@ For testing, use the [ePorezi test environment](https://test.purs.gov.rs). The O
 
 ![demo](assets/demo.gif)
 
+## Website access
+
+By default, the signing WebSocket accepts only the production and test ePorezi
+website origins and listens only on loopback. See [website access and transport
+limits](epoxy/docs/browser-boundary.md) for developer access and troubleshooting.
+
 ## Runtime diagnostics
 
 Operational logging omits credentials and certificate identity. Detailed masked

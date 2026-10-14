@@ -34,6 +34,7 @@ struct ConfigSlice {
     pub pin_prompt: Option<PinPromptKind>,
     pub allow_soft_tokens: Option<bool>,
     pub show_window: Option<bool>,
+    pub allow_missing_origin: Option<bool>,
     pub selection_path: Option<String>,
 }
 
@@ -47,6 +48,7 @@ pub struct Config {
     pub pin_prompt: PinPromptKind,
     pub allow_soft_tokens: bool,
     pub show_window: bool,
+    pub allow_missing_origin: bool,
     pub selection_path: String,
 }
 
@@ -61,6 +63,7 @@ impl Default for Config {
             pin_prompt: PinPromptKind::default(),
             allow_soft_tokens: false,
             show_window: false,
+            allow_missing_origin: false,
             selection_path: default_selection_path(),
         }
     }
@@ -77,6 +80,9 @@ impl Config {
             pin_prompt: slice.pin_prompt.unwrap_or(self.pin_prompt),
             allow_soft_tokens: slice.allow_soft_tokens.unwrap_or(self.allow_soft_tokens),
             show_window: slice.show_window.unwrap_or(self.show_window),
+            allow_missing_origin: slice
+                .allow_missing_origin
+                .unwrap_or(self.allow_missing_origin),
             selection_path: slice.selection_path.unwrap_or(self.selection_path),
         }
     }
@@ -155,6 +161,11 @@ pub struct ClapConfig {
     #[arg(long)]
     show_window: bool,
 
+    /// Development only: admit Origin-less clients; wrong present Origins remain blocked
+    #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, require_equals = true,
+          default_missing_value = "true", default_value_t = false)]
+    allow_missing_origin: bool,
+
     /// Print default config
     #[serde(skip)]
     #[arg(long, default_value_t = false)]
@@ -209,6 +220,7 @@ pub fn get_config() -> Result<Config, anyhow::Error> {
         pin_prompt: get_cli_value(&matches, "pin_prompt"),
         allow_soft_tokens: get_cli_value(&matches, "allow_soft_tokens"),
         show_window: get_cli_value(&matches, "show_window"),
+        allow_missing_origin: get_cli_value(&matches, "allow_missing_origin"),
         selection_path: get_cli_value(&matches, "selection_path"),
     };
 
@@ -220,6 +232,10 @@ pub fn get_config() -> Result<Config, anyhow::Error> {
 
 impl Config {
     fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.max_connections > 0,
+            "--max-connections must be at least 1"
+        );
         #[cfg(feature = "ui-gtk")]
         let gui = matches!(self.pin_prompt, PinPromptKind::Ui);
         #[cfg(not(feature = "ui-gtk"))]
@@ -234,6 +250,36 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_origin_is_explicit_and_cli_false_overrides_toml_true() {
+        assert!(!Config::default().allow_missing_origin);
+        let toml: ConfigSlice = toml::from_str("allow_missing_origin = true").unwrap();
+        let config = Config::default().merge(toml);
+        assert!(config.allow_missing_origin);
+        let matches = ClapConfig::command()
+            .try_get_matches_from(["epoxy", "--allow-missing-origin=false"])
+            .unwrap();
+        let cli = ConfigSlice {
+            allow_missing_origin: get_cli_value(&matches, "allow_missing_origin"),
+            ..Default::default()
+        };
+        assert!(!config.merge(cli).allow_missing_origin);
+        let matches = ClapConfig::command()
+            .try_get_matches_from(["epoxy", "--allow-missing-origin"])
+            .unwrap();
+        assert_eq!(
+            get_cli_value::<bool>(&matches, "allow_missing_origin"),
+            Some(true)
+        );
+        assert!(
+            Config {
+                max_connections: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
     #[test]
     fn show_window_requires_gui_prompt_and_honors_config_precedence() {
         let mut config = Config {
