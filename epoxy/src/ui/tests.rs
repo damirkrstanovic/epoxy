@@ -196,6 +196,13 @@ fn desktop_widgets_and_pin_lifecycle() {
                 .expires_in_seconds
                 .is_none()
         );
+        let old_buffer = entry
+            .delegate()
+            .unwrap()
+            .downcast::<gtk4::Text>()
+            .unwrap()
+            .buffer()
+            .downgrade();
         match action {
             "close" | "long" => window.close(),
             "Cancel" => button(&window, "Cancel").emit_clicked(),
@@ -233,6 +240,10 @@ fn desktop_widgets_and_pin_lifecycle() {
             worker.join().unwrap();
         }
         assert!(entry.text().is_empty());
+        assert!(
+            old_buffer.upgrade().is_none(),
+            "completed PIN dialog retained its old text buffer"
+        );
         assert!(!format!("{:?}", controller.snapshot()).contains("synthetic-secret"));
     }
     controller.service_finished();

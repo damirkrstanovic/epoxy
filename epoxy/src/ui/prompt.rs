@@ -9,7 +9,7 @@ impl PendingReply {
             let _ = reply.send(None);
         }
     }
-    pub fn submit(&mut self, pin: String) {
+    pub fn submit(&mut self, pin: crate::pin::SecretPin) {
         if let Some(reply) = self.0.take() {
             let _ = reply.send(Some(pin));
         }

@@ -9,7 +9,7 @@ libraries, generated third-party bindings, or other dependencies.
 
 Reviewed on 2026-10-15 using `cargo metadata --locked --all-features` and the
 installed native-library package metadata. The resolved Cargo graph contains
-276 packages (274 registry dependencies and two local packages), including
+277 packages (275 registry dependencies and two local packages), including
 build, development and non-Linux dependencies.
 No incompatible license was identified for distributing this project as an
 open-source MIT application with the conditions below. This is a technical
@@ -20,6 +20,7 @@ inventory, not a legal opinion or a complete binary-release notice bundle.
 | Most Rust dependencies | MIT, Apache-2.0, BSD, ISC or Unlicense; retain applicable license/copyright/NOTICE material when redistributing their code in a binary. For OR expressions choose an offered license; AND expressions require both. |
 | `option-ext` 0.2.0, via `dirs` | MPL-2.0; preserve its license and make its exact covered source, including any changes, available to recipients. This does not require relicensing Epoxy's separate files. Source: [crate archive](https://crates.io/api/v1/crates/option-ext/0.2.0/download), [repository](https://github.com/soc/option-ext). |
 | `unicode-ident` | `(MIT OR Apache-2.0) AND Unicode-3.0`; the Unicode notice is additional, not an alternative to MIT/Apache. |
+| `zeroize` 1.9.0 | Apache-2.0 OR MIT; retain the selected license notice when shipping its code. |
 | `ksni` | Unlicense in crate metadata; preserve upstream provenance. |
 | GTK and related native libraries | GTK is LGPL-2.1-or-later. Prefer distribution-provided shared libraries. Shipping these libraries or statically linking them adds their notice, source and relinking obligations. The MIT license of gtk-rs bindings does not replace native GTK's license. |
 | NSS / NSPR | MPL-2.0; native shared libraries. If bundled, supply their notices and corresponding covered source. |

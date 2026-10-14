@@ -6,17 +6,53 @@ use tokio_util::sync::CancellationToken;
 
 use crate::nss::{PinInfo, PinPrompt};
 
+/// Owned PIN buffer. Never cloned, serialized or included in Debug output.
+/// The entire String allocation is zeroized when ownership is released.
+#[derive(Default)]
+pub struct SecretPin(zeroize::Zeroizing<String>);
+impl SecretPin {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+    pub fn is_valid(&self) -> bool {
+        self.0.len() <= 1024 && !self.0.contains('\0')
+    }
+}
+impl From<String> for SecretPin {
+    fn from(value: String) -> Self {
+        Self(zeroize::Zeroizing::new(value))
+    }
+}
+impl From<&str> for SecretPin {
+    fn from(value: &str) -> Self {
+        value.to_owned().into()
+    }
+}
+impl std::fmt::Debug for SecretPin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretPin([REDACTED])")
+    }
+}
+// Comparisons are useful in lifecycle tests, never for authentication decisions.
+#[cfg(test)]
+impl PartialEq for SecretPin {
+    fn eq(&self, other: &Self) -> bool {
+        self.expose() == other.expose()
+    }
+}
+
 /// Request-scoped credential. Debug output must never reveal its contents.
 #[derive(Default, serde::Deserialize)]
 #[serde(try_from = "String")]
-pub struct RequestPin(String);
+pub struct RequestPin(SecretPin);
 impl TryFrom<String> for RequestPin {
     type Error = &'static str;
     fn try_from(pin: String) -> Result<Self, Self::Error> {
-        if pin.len() > 1024 {
+        let pin = SecretPin::from(pin);
+        if pin.expose().len() > 1024 {
             return Err("PIN exceeds request limit");
         }
-        if pin.contains('\0') {
+        if pin.expose().contains('\0') {
             return Err("invalid PIN encoding");
         }
         Ok(Self(pin))
@@ -34,7 +70,7 @@ impl RequestPin {
         shutdown: CancellationToken,
     ) -> RequestPinPrompt<'_> {
         RequestPinPrompt {
-            supplied: std::cell::RefCell::new((!self.0.is_empty()).then_some(self.0)),
+            supplied: std::cell::RefCell::new((!self.0.expose().is_empty()).then_some(self.0)),
             attempted: std::cell::Cell::new(false),
             fallback,
             shutdown,
@@ -42,14 +78,16 @@ impl RequestPin {
     }
 }
 pub struct RequestPinPrompt<'a> {
-    supplied: std::cell::RefCell<Option<String>>,
+    supplied: std::cell::RefCell<Option<SecretPin>>,
     attempted: std::cell::Cell<bool>,
     fallback: &'a dyn PinPrompt,
     shutdown: CancellationToken,
 }
 impl PinPrompt for RequestPinPrompt<'_> {
-    fn prompt_pin(&self, info: &PinInfo, token: String) -> Option<String> {
+    fn prompt_pin(&self, info: &PinInfo, token: String) -> Option<SecretPin> {
         if self.attempted.replace(true) || self.shutdown.is_cancelled() {
+            // Clear even while the prompt object is still alive.
+            self.supplied.borrow_mut().take();
             return None;
         }
         let pin = match self.supplied.borrow_mut().take() {
@@ -73,8 +111,10 @@ pub fn tty_pin_method(_: CancellationToken) -> PinMethod {
 pub struct TtyPinPrompt;
 
 impl PinPrompt for TtyPinPrompt {
-    fn prompt_pin(&self, pin_info: &PinInfo, token_name: String) -> Option<String> {
-        rpassword::prompt_password(tty_prompt_text(pin_info, &token_name)).ok()
+    fn prompt_pin(&self, pin_info: &PinInfo, token_name: String) -> Option<SecretPin> {
+        rpassword::prompt_password(tty_prompt_text(pin_info, &token_name))
+            .ok()
+            .map(SecretPin::from)
     }
 }
 
@@ -98,7 +138,7 @@ mod tests {
     use std::cell::Cell;
     struct Native(Cell<usize>);
     impl PinPrompt for Native {
-        fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<String> {
+        fn prompt_pin(&self, _: &PinInfo, _: String) -> Option<SecretPin> {
             self.0.set(self.0.get() + 1);
             Some("native-secret".into())
         }
