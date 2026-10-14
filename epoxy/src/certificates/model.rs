@@ -73,6 +73,24 @@ impl PublicCertificate {
             .and_then(|a| a.as_str().ok())
             .map(str::to_owned)
             .unwrap_or_else(|| x509.subject().to_string());
+        let given = x509
+            .subject()
+            .iter_by_oid(&x509_parser::oid_registry::OID_X509_GIVEN_NAME)
+            .next()
+            .and_then(|a| a.as_str().ok());
+        let surname = x509
+            .subject()
+            .iter_by_oid(&x509_parser::oid_registry::OID_X509_SURNAME)
+            .next()
+            .and_then(|a| a.as_str().ok());
+        let holder = match (given, surname) {
+            (Some(given), Some(surname))
+                if !given.trim().is_empty() && !surname.trim().is_empty() =>
+            {
+                format!("{} {}", given.trim(), surname.trim())
+            }
+            _ => holder,
+        };
         let purpose = match (digital, commitment) {
             (true, true) => "Digital signature, content commitment",
             (true, false) => "Digital signature",
@@ -187,9 +205,9 @@ pub fn display_text(text: &str, limit: usize) -> String {
 }
 pub fn catalog_status_text(snapshot: &super::CertificateSnapshot) -> &'static str {
     match snapshot.status {
-        super::CatalogStatus::NotLoaded => "Refresh to read public card certificates",
-        super::CatalogStatus::Loading => "Refreshing certificates or applying selection…",
-        super::CatalogStatus::Ready => "Public certificates loaded",
+        super::CatalogStatus::NotLoaded => "Insert your card and refresh certificates",
+        super::CatalogStatus::Loading => "Updating certificates…",
+        super::CatalogStatus::Ready => "Signing certificates",
         super::CatalogStatus::Busy => "Busy — wait for the current card/PIN operation",
         super::CatalogStatus::NoCard => "No supported card detected; insert the card and refresh",
         super::CatalogStatus::NativeUnavailable => {
@@ -199,7 +217,7 @@ pub fn catalog_status_text(snapshot: &super::CertificateSnapshot) -> &'static st
 }
 pub fn selection_status_text(snapshot: &super::CertificateSnapshot) -> &'static str {
     let Some(selected) = &snapshot.selected else {
-        return "Using portal certificate selection";
+        return "Choose a signing certificate";
     };
     let mut matches = snapshot
         .contexts
@@ -215,9 +233,9 @@ pub fn selection_status_text(snapshot: &super::CertificateSnapshot) -> &'static 
     } else if !available {
         "Selected certificate unavailable or ambiguous; refresh, choose another, or clear"
     } else if snapshot.remembered {
-        "Selected for signing and remembered; PIN is never saved"
+        "Your preferred signing certificate is selected"
     } else {
-        "Selected for this session; PIN is never saved"
+        "Signing certificate selected"
     }
 }
 
@@ -279,4 +297,45 @@ pub(crate) fn uri_matches_info(uri: &[u8], fields: [&[u8]; 4]) -> bool {
         let length = field.iter().rposition(|b| *b != b' ').map_or(0, |n| n + 1);
         found[i].as_deref().unwrap_or(b"") == &field[..length]
     })
+}
+
+impl PublicContext {
+    pub fn is_signing_context(&self) -> bool {
+        let label = self.label.trim().to_ascii_lowercase();
+        label == "digital signature pin" || label.ends_with("(digital signature pin)")
+    }
+}
+/// A display/profile hint ranks contexts, while exact key/slot checks still
+/// enforce identity. Never choose by slot number or guess between candidates.
+pub fn default_signing_certificate(contexts: &[PublicContext]) -> Option<CertificateKey> {
+    let mut candidates = contexts
+        .iter()
+        .filter(|c| c.is_signing_context())
+        .flat_map(|c| &c.certificates)
+        .filter(|c| c.eligibility == Eligibility::Eligible);
+    let key = candidates.next()?.key.clone();
+    if candidates.next().is_some() {
+        return None;
+    }
+    if contexts
+        .iter()
+        .flat_map(|c| &c.certificates)
+        .filter(|c| c.key == key)
+        .count()
+        != 1
+    {
+        return None;
+    }
+    Some(key)
+}
+pub fn signing_certificate_title(context: &PublicContext, cert: &PublicCertificate) -> String {
+    format!(
+        "{} — {}",
+        display_text(&cert.holder, 80),
+        if context.is_signing_context() {
+            "Digital signing"
+        } else {
+            "Other signing certificate"
+        }
+    )
 }

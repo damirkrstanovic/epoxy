@@ -1,7 +1,7 @@
 use crate::certificates::*;
 use ksni::{
     MenuItem,
-    menu::{CheckmarkItem, StandardItem, SubMenu},
+    menu::{StandardItem, SubMenu},
 };
 fn menu_text(text: &str) -> String {
     display_text(text, 160).replace('_', "__")
@@ -20,58 +20,38 @@ pub(super) fn build<T: 'static>(controller: &CertificateController) -> Vec<MenuI
         snapshot.status,
         CatalogStatus::Busy | CatalogStatus::Loading
     );
-    let refresh = controller.clone();
-    let clear = controller.clone();
-    let mut menu = vec![
-        information(catalog_status_text(&snapshot).into()),
-        StandardItem {
-            label: "Refresh".into(),
-            enabled: !matches!(
-                snapshot.status,
-                CatalogStatus::Busy | CatalogStatus::Loading
-            ),
-            activate: Box::new(move |_| {
-                let _ = refresh.request_refresh();
-            }),
-            ..Default::default()
-        }
-        .into(),
-        StandardItem {
-            label: "Use portal selection and forget saved choice".into(),
-            enabled,
-            activate: Box::new(move |_| {
-                let _ = clear.request_clear(true);
-            }),
-            ..Default::default()
-        }
-        .into(),
-    ];
+    let mut menu = Vec::new();
+    if snapshot.status != CatalogStatus::Ready {
+        menu.push(information(catalog_status_text(&snapshot).into()));
+    }
     if let Some(error) = snapshot.error {
         menu.push(information(error.to_string()));
     }
-    menu.push(information(selection_status_text(&snapshot).into()));
-    if snapshot.selected.is_some() {
+    if snapshot.selected.is_some()
+        && !snapshot
+            .contexts
+            .iter()
+            .flat_map(|c| &c.certificates)
+            .any(|c| snapshot.selected.as_ref() == Some(&c.key))
+    {
         menu.push(information(
-            "After changing selection, reload/reselect certificates in the portal".into(),
+            "Selected certificate unavailable; insert its card or choose another".into(),
         ));
     }
-    for context in &snapshot.contexts {
-        let mut children = vec![information(format!("Module: {}", context.key.module_name))];
-        if context.requires_authentication {
-            children.push(information(
-                "Certificates require authentication; choose this context in the portal".into(),
-            ));
-        } else if context.certificates.is_empty() {
-            children.push(information(
-                "No public signing certificates in this PIN context".into(),
-            ));
-        }
+    if snapshot.status == CatalogStatus::Ready
+        && snapshot.contexts.iter().all(|c| c.certificates.is_empty())
+    {
+        menu.push(information(
+            "No signing certificates found; check your card".into(),
+        ));
+    }
+    let mut contexts: Vec<_> = snapshot.contexts.iter().collect();
+    contexts.sort_by_key(|c| !c.is_signing_context());
+    for context in &contexts {
         for cert in &context.certificates {
             let selected = snapshot.selected.as_ref() == Some(&cert.key);
-            let select = controller.clone();
-            let remember = controller.clone();
             let key = cert.key.clone();
-            let remembered_key = key.clone();
+            let choose = controller.clone();
             let generation = snapshot.generation;
             let eligible = enabled
                 && cert.eligibility == Eligibility::Eligible
@@ -83,60 +63,99 @@ pub(super) fn build<T: 'static>(controller: &CertificateController) -> Vec<MenuI
                     .count()
                     == 1;
             let details = vec![
-                information(format!("Holder: {}", cert.holder)),
-                information(format!("Issuer: {}", cert.issuer)),
-                information(format!("Valid from: {}", cert.not_before)),
+                information(format!("Issued by: {}", cert.issuer)),
                 information(format!("Valid until: {}", cert.not_after)),
+                information(format!("Valid from: {}", cert.not_before)),
                 information(format!("Purpose: {}", cert.purpose)),
-                information(cert.eligibility.label().into()),
-                CheckmarkItem {
-                    label: "Selected for signing".into(),
-                    checked: selected,
-                    enabled: false,
-                    ..Default::default()
-                }
-                .into(),
+            ];
+            let mut actions = vec![
                 StandardItem {
-                    label: "Use for this session".into(),
+                    label: if selected && snapshot.remembered {
+                        "Using this certificate"
+                    } else {
+                        "Use this certificate"
+                    }
+                    .into(),
                     enabled: eligible,
                     activate: Box::new(move |_| {
-                        let _ = select.request_select(key.clone(), false, generation);
+                        let _ = choose.request_select(key.clone(), true, generation);
                     }),
                     ..Default::default()
                 }
                 .into(),
-                StandardItem {
-                    label: "Use and remember".into(),
-                    enabled: eligible,
-                    activate: Box::new(move |_| {
-                        let _ = remember.request_select(remembered_key.clone(), true, generation);
-                    }),
+                SubMenu {
+                    label: "Certificate details…".into(),
+                    submenu: details,
                     ..Default::default()
                 }
                 .into(),
             ];
-            children.push(
+            if cert.eligibility != Eligibility::Eligible {
+                actions.insert(0, information(cert.eligibility.label().into()));
+            }
+            menu.push(
                 SubMenu {
                     label: format!(
                         "{}{}",
                         if selected { "✓ " } else { "" },
-                        menu_text(&cert.holder)
+                        menu_text(&signing_certificate_title(context, cert))
                     ),
-                    submenu: details,
+                    submenu: actions,
                     ..Default::default()
                 }
                 .into(),
             );
         }
-        menu.push(
+    }
+    let refresh = controller.clone();
+    menu.push(MenuItem::Separator);
+    menu.push(
+        StandardItem {
+            label: "Refresh certificates".into(),
+            enabled,
+            activate: Box::new(move |_| {
+                let _ = refresh.request_refresh();
+            }),
+            ..Default::default()
+        }
+        .into(),
+    );
+    let clear = controller.clone();
+    let mut advanced = vec![
+        StandardItem {
+            label: "Choose automatically".into(),
+            enabled,
+            activate: Box::new(move |_| {
+                let _ = clear.request_clear(true);
+            }),
+            ..Default::default()
+        }
+        .into(),
+    ];
+    for context in contexts {
+        let mut technical = vec![information(format!("Module: {}", context.key.module_name))];
+        if context.requires_authentication {
+            technical.push(information("Certificates require a PIN to view".into()));
+        } else if context.certificates.is_empty() {
+            technical.push(information("No signing certificates".into()));
+        }
+        advanced.push(
             SubMenu {
                 label: menu_text(&context.label),
-                submenu: children,
+                submenu: technical,
                 ..Default::default()
             }
             .into(),
         );
     }
+    menu.push(
+        SubMenu {
+            label: "Advanced".into(),
+            submenu: advanced,
+            ..Default::default()
+        }
+        .into(),
+    );
     menu
 }
 
@@ -197,10 +216,25 @@ mod tests {
         None
     }
     #[test]
-    fn menu_actions_dispatch_exact_context_and_remember_intent() {
+    fn one_certificate_menu_click_remembers_the_exact_identity() {
         let (controller, mut rx, key) = setup();
         let menu = build::<()>(&controller);
-        (action(&menu, "Use for this session").activate)(&mut ());
+        let card = menu
+            .iter()
+            .find_map(|i| match i {
+                MenuItem::SubMenu(s) if s.label.contains("signing") => Some(s),
+                _ => None,
+            })
+            .expect("certificate is directly listed");
+        let use_this = card
+            .submenu
+            .iter()
+            .find_map(|i| match i {
+                MenuItem::Standard(s) if s.label == "Use this certificate" => Some(s),
+                _ => None,
+            })
+            .expect("one use action at certificate level");
+        (use_this.activate)(&mut ());
         match rx.try_recv().unwrap() {
             CertificateCommand::Select {
                 key: k,
@@ -208,21 +242,13 @@ mod tests {
                 generation,
             } => {
                 assert!(k == key);
-                assert!(!remember);
+                assert!(remember);
                 assert_eq!(generation, 1);
             }
             _ => panic!("selection expected"),
         }
         controller.finish(Ok(()));
-        let menu = build::<()>(&controller);
-        (action(&menu, "Use and remember").activate)(&mut ());
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(CertificateCommand::Select { remember: true, .. })
-        ));
-        controller.finish(Ok(()));
-        let menu = build::<()>(&controller);
-        (action(&menu, "Use portal selection and forget saved choice").activate)(&mut ());
+        (action(&menu, "Choose automatically").activate)(&mut ());
         assert!(matches!(
             rx.try_recv(),
             Ok(CertificateCommand::Clear { forget_saved: true })
@@ -233,17 +259,17 @@ mod tests {
         let (controller, mut rx, _) = setup();
         let menu = build::<()>(&controller);
         controller.publish(controller.snapshot().contexts);
-        (action(&menu, "Use for this session").activate)(&mut ());
+        (action(&menu, "Use this certificate").activate)(&mut ());
         assert!(rx.try_recv().is_err());
         assert_eq!(controller.snapshot().error, Some(SelectionError::Stale));
         let guard = controller.native_operation();
         let menu = build::<()>(&controller);
-        assert!(!action(&menu, "Use for this session").enabled);
-        (action(&menu, "Use for this session").activate)(&mut ());
+        assert!(!action(&menu, "Use this certificate").enabled);
+        (action(&menu, "Use this certificate").activate)(&mut ());
         assert!(rx.try_recv().is_err());
         drop(guard);
         let menu = build::<()>(&controller);
-        (action(&menu, "Refresh").activate)(&mut ());
+        (action(&menu, "Refresh certificates").activate)(&mut ());
         assert!(matches!(rx.try_recv(), Ok(CertificateCommand::Refresh)));
     }
     #[test]

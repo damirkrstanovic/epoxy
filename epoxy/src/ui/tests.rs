@@ -25,7 +25,7 @@ fn button(window: &gtk4::Window, name: &str) -> Button {
         .into_iter()
         .filter_map(|w| w.downcast::<Button>().ok())
         .find(|b| b.label().as_deref() == Some(name))
-        .unwrap()
+        .unwrap_or_else(|| panic!("missing button {name}"))
 }
 #[test]
 #[ignore = "requires isolated display and session bus; run with xvfb-run dbus-run-session"]
@@ -259,7 +259,7 @@ fn certificate_widgets_show_details_dispatch_choices_and_dismiss_without_quittin
         rx.try_recv().is_err(),
         "opening a view must not probe or authenticate"
     );
-    button(view.window.upcast_ref(), "Refresh").emit_clicked();
+    button(view.window.upcast_ref(), "Refresh certificates").emit_clicked();
     assert!(matches!(rx.try_recv(), Ok(CertificateCommand::Refresh)));
     let context = ContextKey {
         module_name: "Synthetic".into(),
@@ -287,7 +287,7 @@ fn certificate_widgets_show_details_dispatch_choices_and_dismiss_without_quittin
             .filter_map(|w| w.downcast::<gtk4::Label>().ok())
             .any(|l| l.text().contains("<b>Željko") && !l.uses_markup())
     );
-    button(view.window.upcast_ref(), "Details").emit_clicked();
+    button(view.window.upcast_ref(), "Certificate details…").emit_clicked();
     pump();
     let details = app
         .windows()
@@ -297,7 +297,7 @@ fn certificate_widgets_show_details_dispatch_choices_and_dismiss_without_quittin
     button(&details, "Close").emit_clicked();
     pump();
     assert!(!details.is_visible());
-    button(view.window.upcast_ref(), "Details").emit_clicked();
+    button(view.window.upcast_ref(), "Certificate details…").emit_clicked();
     pump();
     let details = app
         .windows()
@@ -330,33 +330,29 @@ fn certificate_widgets_show_details_dispatch_choices_and_dismiss_without_quittin
         );
     }
 
-    button(view.window.upcast_ref(), "Use for this session").emit_clicked();
+    button(view.window.upcast_ref(), "Use this certificate").emit_clicked();
     match rx.try_recv().unwrap() {
         CertificateCommand::Select {
             key: k,
-            remember: false,
+            remember: true,
             ..
         } => assert!(k == key),
-        _ => panic!("session selection expected"),
+        _ => panic!("remembered selection expected"),
     }
     catalog.finish(Ok(()));
     view.refresh();
-    button(view.window.upcast_ref(), "Use and remember").emit_clicked();
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(CertificateCommand::Select { remember: true, .. })
-    ));
-    catalog.finish(Ok(()));
     let guard = catalog.native_operation();
     view.refresh();
-    assert!(!button(view.window.upcast_ref(), "Use for this session").is_sensitive());
+    assert!(!button(view.window.upcast_ref(), "Use this certificate").is_sensitive());
     drop(guard);
     view.refresh();
-    button(
-        view.window.upcast_ref(),
-        "Use portal selection and forget saved choice",
-    )
-    .emit_clicked();
+    let advanced = descendants(view.window.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk4::Expander>().ok())
+        .unwrap();
+    advanced.set_expanded(true);
+    pump();
+    button(view.window.upcast_ref(), "Choose automatically").emit_clicked();
     assert!(matches!(
         rx.try_recv(),
         Ok(CertificateCommand::Clear { forget_saved: true })

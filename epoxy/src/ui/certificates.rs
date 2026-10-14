@@ -39,8 +39,6 @@ fn details(
     body.set_margin_bottom(18);
     for line in [
         format!("Holder: {}", cert.holder),
-        format!("PIN context: {}", context.label),
-        format!("Module: {}", context.key.module_name),
         format!("Issuer: {}", cert.issuer),
         format!("Valid from: {}", cert.not_before),
         format!("Valid until: {}", cert.not_after),
@@ -49,6 +47,12 @@ fn details(
     ] {
         body.append(&text(&line));
     }
+    let advanced = gtk4::Expander::new(Some("Advanced"));
+    advanced.set_child(Some(&text(&format!(
+        "PIN context: {}; module: {}",
+        context.label, context.key.module_name
+    ))));
+    body.append(&advanced);
     let close = Button::with_label("Close");
     body.append(&close);
     let scroll = ScrolledWindow::builder()
@@ -91,11 +95,13 @@ impl CertificateWindow {
         root.set_margin_bottom(18);
         let status = text("");
         root.append(&status);
-        let refresh_button = Button::with_label("Refresh");
+        let refresh_button = Button::with_label("Refresh certificates");
         root.append(&refresh_button);
-        let clear_button = Button::with_label("Use portal selection and forget saved choice");
-        root.append(&clear_button);
-        root.append(&text("After changing selection, reload/reselect certificates in the portal. PINs are never saved."));
+        let clear_button = Button::with_label("Choose automatically");
+        let advanced = gtk4::Expander::new(Some("Advanced"));
+        advanced.set_child(Some(&clear_button));
+        root.append(&advanced);
+        root.append(&text("Your choice is remembered. PINs are never saved. After changing certificates, reload the portal."));
         let body = Box::new(Orientation::Vertical, 18);
         let scroll = ScrolledWindow::builder()
             .child(&body)
@@ -172,37 +178,22 @@ impl CertificateWindow {
                 self.body.remove(&child);
             }
             self.actions.borrow_mut().clear();
-            for context in &snapshot.contexts {
-                let heading = text(&display_text(&context.label, 160));
-                heading.add_css_class("heading");
-                self.body.append(&heading);
-                self.body
-                    .append(&text(&format!("Module: {}", context.key.module_name)));
-                if context.requires_authentication {
-                    self.body.append(&text(
-                        "Certificates require authentication; choose this context in the portal",
-                    ));
-                } else if context.certificates.is_empty() {
-                    self.body
-                        .append(&text("No public signing certificates in this PIN context"));
-                }
+            let mut contexts: Vec<_> = snapshot.contexts.iter().collect();
+            contexts.sort_by_key(|c| !c.is_signing_context());
+            for context in contexts {
                 for cert in &context.certificates {
                     let selected = snapshot.selected.as_ref() == Some(&cert.key);
                     self.body.append(&text(&format!(
                         "{}{}",
                         if selected { "✓ " } else { "" },
-                        display_text(&cert.holder, 160)
-                    )));
-                    self.body.append(&text(&format!(
-                        "Issuer: {}",
-                        display_text(&cert.issuer, 200)
+                        signing_certificate_title(context, cert)
                     )));
                     self.body
                         .append(&text(&format!("Valid until: {}", cert.not_after)));
-                    self.body.append(&text(&cert.purpose));
-                    self.body.append(&text(cert.eligibility.label()));
-                    let details_button = Button::with_label("Details");
-                    self.body.append(&details_button);
+                    if cert.eligibility != Eligibility::Eligible {
+                        self.body.append(&text(cert.eligibility.label()));
+                    }
+                    let details_button = Button::with_label("Certificate details…");
                     let cert_details = cert.clone();
                     let context_details = context.clone();
                     let weak = self.window.downgrade();
@@ -222,20 +213,23 @@ impl CertificateWindow {
                             .count()
                             == 1
                     {
-                        for (label, remember) in
-                            [("Use for this session", false), ("Use and remember", true)]
-                        {
-                            let button = Button::with_label(label);
-                            let catalog = self.controller.clone();
-                            let key = cert.key.clone();
-                            let generation = snapshot.generation;
-                            button.connect_clicked(move |_| {
-                                let _ = catalog.request_select(key.clone(), remember, generation);
-                            });
-                            self.body.append(&button);
-                            self.actions.borrow_mut().push(button);
-                        }
+                        let label = if selected && snapshot.remembered {
+                            "Using this certificate"
+                        } else {
+                            "Use this certificate"
+                        };
+                        let remember = true;
+                        let button = Button::with_label(label);
+                        let catalog = self.controller.clone();
+                        let key = cert.key.clone();
+                        let generation = snapshot.generation;
+                        button.connect_clicked(move |_| {
+                            let _ = catalog.request_select(key.clone(), remember, generation);
+                        });
+                        self.body.append(&button);
+                        self.actions.borrow_mut().push(button);
                     }
+                    self.body.append(&details_button);
                 }
             }
         }

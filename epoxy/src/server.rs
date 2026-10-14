@@ -181,7 +181,7 @@ where
                             .collect(),
                     );
                     model.unique(&key)?;
-                    controller.publish(contexts);
+                    controller.publish_for_selection(contexts);
                     controller.commit_choice(
                         key,
                         remember,
@@ -377,6 +377,14 @@ where
         let Ok((nss, _)) = &*self.nss_xmlsec else {
             return ResultResponse::error(responses::GetTerminalsErrorCode::GenericError);
         };
+
+        match epoxy::certificates::native::public_catalog(nss, self.config.allow_soft_tokens) {
+            Ok(contexts) => self.desktop.certificates().publish(contexts),
+            Err(_) => {
+                self.desktop.certificates().unavailable();
+                return ResultResponse::error(responses::GetTerminalsErrorCode::GenericError);
+            }
+        }
 
         let tokens = nss.get_tokens();
         let Some(tokens) = tokens else {

@@ -137,6 +137,13 @@ impl CertificateController {
         result
     }
     pub fn publish(&self, contexts: Vec<PublicContext>) {
+        self.publish_catalog(contexts, true);
+    }
+    /// Revalidation for an explicit action must not apply a default before saving succeeds.
+    pub fn publish_for_selection(&self, contexts: Vec<PublicContext>) {
+        self.publish_catalog(contexts, false);
+    }
+    fn publish_catalog(&self, contexts: Vec<PublicContext>, automatic: bool) {
         let mut s = self.state.lock().unwrap();
         s.model.replace_entries(
             contexts
@@ -144,6 +151,12 @@ impl CertificateController {
                 .flat_map(|c| c.certificates.clone())
                 .collect(),
         );
+        if automatic
+            && s.model.selected_key().is_none()
+            && let Some(key) = default_signing_certificate(&contexts)
+        {
+            s.model.set_selection(Some(key));
+        }
         s.status = if contexts.is_empty() {
             CatalogStatus::NoCard
         } else {
@@ -206,7 +219,8 @@ impl CertificateController {
         if forget_saved {
             store.forget()?;
         }
-        s.model.set_selection(None);
+        let automatic = default_signing_certificate(&s.contexts);
+        s.model.set_selection(automatic);
         s.remembered = false;
         Ok(())
     }

@@ -208,3 +208,65 @@ fn cached_uri_must_match_fresh_token_information_bytes() {
         [b"Signature PIN", b"", b"", b""]
     ));
 }
+fn signing_context(token: &[u8], hash: u8) -> PublicContext {
+    let c = cert(token, hash);
+    PublicContext {
+        key: c.key.context.clone(),
+        label: "Synthetic (Digital Signature PIN)".into(),
+        requires_authentication: false,
+        certificates: vec![c],
+    }
+}
+#[test]
+fn discovery_defaults_to_one_signing_domain_and_never_switches_a_missing_choice() {
+    let (controller, _) = CertificateController::new();
+    let general = cert(b"general", 1);
+    let signing = signing_context(b"signing", 2);
+    controller.publish(vec![
+        PublicContext {
+            key: general.key.context.clone(),
+            label: "General PIN".into(),
+            requires_authentication: false,
+            certificates: vec![general.clone()],
+        },
+        signing.clone(),
+    ]);
+    assert!(controller.snapshot().selected == Some(signing.certificates[0].key.clone()));
+    assert!(!controller.snapshot().remembered);
+    let other = signing_context(b"other-card", 3);
+    controller.publish(vec![other]);
+    assert!(
+        controller.snapshot().selected == Some(signing.certificates[0].key.clone()),
+        "removal must not redirect signing"
+    );
+    controller.commit_selection(Some(general.key.clone()), true);
+    controller.publish(vec![signing]);
+    assert!(
+        controller.snapshot().selected == Some(general.key),
+        "explicit choice beats the default"
+    );
+}
+#[test]
+fn automatic_selection_requires_one_eligible_identity_in_a_dedicated_signing_context() {
+    let (controller, _) = CertificateController::new();
+    controller.publish(vec![signing_context(b"a", 1), signing_context(b"b", 2)]);
+    assert!(controller.snapshot().selected.is_none());
+    let mut expired = signing_context(b"c", 3);
+    expired.certificates[0].eligibility = Eligibility::Expired;
+    controller.publish(vec![expired]);
+    assert!(controller.snapshot().selected.is_none());
+    let mut general = signing_context(b"d", 4);
+    general.label = "General PIN".into();
+    controller.publish(vec![general]);
+    assert!(controller.snapshot().selected.is_none());
+}
+#[test]
+fn person_name_is_shown_without_the_certificates_common_name_identifier() {
+    let context = cert(b"a", 1).key.context;
+    let certificate = PublicCertificate::from_der(
+        context,
+        include_bytes!("../../tests/fixtures/holder-name.der"),
+    )
+    .unwrap();
+    assert_eq!(certificate.holder, "Željko Test");
+}

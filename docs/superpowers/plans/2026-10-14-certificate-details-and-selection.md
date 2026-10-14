@@ -180,3 +180,18 @@ Review rulings and limits (the cost is the behavior not established/implemented)
 - Certificate administration, trust/revocation and additional algorithms — expressly excluded, current eligibility is usability metadata — cost if wrong: the view cannot establish trust/qualification or administer certificates.
 
 - Unrelated prerequisite diagnostics/tray behavior — previously reviewed outside this diff; integration tests retained — cost if wrong: this review does not independently establish all prerequisite behavior.
+
+## Approved UX follow-up (2026-10-14)
+
+The user approved a bounded redesign after inspecting tray screenshots: certificates
+appear directly by name and purpose, one Use this certificate action remembers the
+choice, details remain explicit, and technical/reset controls move under Advanced.
+On discovery a unique eligible identity in the dedicated Digital Signature context
+is selected automatically. Existing selections remain pinned, including while absent.
+Ambiguous, duplicate or ineligible candidates do not receive a default. Startup/GET_INFO
+stay lazy. Explicit choice revalidation cannot apply a default before save succeeds.
+
+RED→GREEN evidence: automatic default/no fallback, ambiguity/ineligibility, personal
+name extraction without embedded CN identifier, single-level remembered menu action,
+stale/Busy controls, and failed explicit save without implicit selection. GTK checks
+cover the single remembered action, collapsed Advanced and Details Close/Escape.

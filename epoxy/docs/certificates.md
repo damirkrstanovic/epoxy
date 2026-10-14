@@ -7,31 +7,36 @@ that hides its certificates behind login is
 shown as requiring authentication; it can still be chosen through the portal's
 ordinary certificate flow, using Epoxy's native PIN dialog.
 
-Each context shows its token/PIN-context label and module. Certificate submenus
-show holder, issuer, validity dates and key usage. Expired, not-yet-valid and
-unsupported certificates remain visible but cannot be selected. Eligibility
-retains the existing engine's RSA, digitalSignature and contentCommitment usage
-requirements; it does not establish certificate trust or legal qualification.
+Certificates appear directly by holder and purpose, with the selected certificate
+marked. Personal names use given-name/surname attributes when present, avoiding
+certificate identifiers embedded in the common name. Open a certificate and choose
+**Use this certificate** to make it your preferred choice, including future launches.
+**Certificate details…** shows issuer, expiry and purpose. Expired/unsupported
+certificates remain inspectable but cannot be selected. Module and PIN-context
+information, plus **Choose automatically**, are under **Advanced**.
 
-Choose **Use for this session**, or **Use and remember** to save the nonsecret
-certificate/context identity. A checkmark identifies the selected certificate.
-Reload/reselect certificates in the portal after any selection change. Existing
-portal aliases are invalidated, and subsequent listings expose the chosen
-certificate. **Use portal selection and forget saved choice** removes the
-preference and returns certificate selection to the portal.
+On public card discovery (Refresh or the portal's reader request), Epoxy automatically
+selects exactly one eligible certificate in a dedicated Digital Signature context
+when no choice is already active. It recognizes OpenSC's `Digital Signature PIN`
+label/suffix as a preference hint, not as proof of key identity or trust. Multiple
+candidates, duplicates or ineligible certificates require a choice. Other signing
+certificates remain selectable. Eligibility retains the engine's RSA, digitalSignature
+and contentCommitment requirements; it does not establish trust/legal qualification.
 
-A session-only choice makes no preference write. If a previous choice was saved,
-it is used again on the next restart unless explicitly forgotten. A remembered
-choice is checked when the card is discovered/used; missing, duplicated or changed
-identities never cause automatic fallback to another card. Refresh after inserting,
-removing or replacing a card. While card work or PIN entry is active, selection
-controls report Busy. The native service executes discovery and signing serially.
+An existing explicit/remembered choice takes priority. If the selected identity
+disappears or becomes invalid/ambiguous, Epoxy never substitutes a different card.
+Advanced → **Choose automatically** explicitly forgets the preference and returns
+to automatic selection. Automatic choices make no preference writes. Remembered
+selection stores only nonsecret identity; no PIN is saved or cached.
 
-GTK fallback controls include a **Cards and certificates…** button. Its read-only
-catalog, Details, selection and remember actions use the same controller as the
-tray. Certificate windows have Close and Escape; closing them does not quit the
-helper. The details view opens only on explicit request. Long labels are plain
-text and bounded; no certificate data is used as markup or menu access keys.
+Reload the portal after changing certificates; previous aliases are invalidated.
+Startup and GET_INFO remain lazy: automatic selection runs on discovery, not during
+startup. While card work or PIN entry is active, controls report Busy.
+
+GTK fallback provides the same compact certificate list, **Use this certificate**,
+**Certificate details…**, Refresh and collapsed Advanced controls. Close/Escape
+dismiss certificate windows without quitting the helper. Labels are plain text and
+bounded; no certificate data is used as markup or menu access keys.
 
 ## Preference file
 

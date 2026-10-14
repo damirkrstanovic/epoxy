@@ -120,3 +120,24 @@ fn failed_save_keeps_the_old_choice_and_session_only_selection_does_not_write() 
     assert!(controller.snapshot().selected == Some(a.key));
     assert_eq!(controller.snapshot().revision, revision);
 }
+#[test]
+fn failed_explicit_remember_does_not_turn_into_an_automatic_selection() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("selection.json");
+    fs::write(&path, b"unrelated").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let store = PreferenceStore::new(path);
+    let (controller, _) = CertificateController::new();
+    let c = super::tests::cert(b"a", 1);
+    controller.publish_for_selection(vec![PublicContext {
+        key: c.key.context.clone(),
+        label: "Synthetic (Digital Signature PIN)".into(),
+        requires_authentication: false,
+        certificates: vec![c.clone()],
+    }]);
+    assert_eq!(
+        controller.commit_choice(c.key, true, &store),
+        Err(SelectionError::Preference)
+    );
+    assert!(controller.snapshot().selected.is_none());
+}
