@@ -16,6 +16,7 @@ pub(super) struct ControlWindow {
     pub enable: Button,
     pub disable: Button,
     error: Label,
+    dismiss: Button,
 }
 fn label(text: &str) -> Label {
     let label = Label::new(Some(text));
@@ -79,13 +80,41 @@ impl ControlWindow {
         content.append(&actions);
         content.append(&error);
         content.append(&gtk4::Separator::new(Orientation::Horizontal));
-        content.append(&quit);
+        let dismiss = Button::with_label("Close window");
+        let footer = Box::new(Orientation::Horizontal, 12);
+        footer.set_halign(gtk4::Align::End);
+        footer.append(&dismiss);
+        footer.append(&quit);
+        content.append(&footer);
         let window = ApplicationWindow::builder()
             .application(app)
             .title("Epoxy")
             .default_width(460)
             .child(&content)
             .build();
+        dismiss.connect_clicked({
+            let window = window.downgrade();
+            move |_| {
+                if let Some(window) = window.upgrade() {
+                    window.close();
+                }
+            }
+        });
+        let keys = gtk4::EventControllerKey::new();
+        keys.connect_key_pressed({
+            let window = window.downgrade();
+            move |_, key, _, _| {
+                if key == gtk4::gdk::Key::Escape {
+                    if let Some(window) = window.upgrade() {
+                        window.close();
+                    }
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            }
+        });
+        window.add_controller(keys);
         enable.connect_clicked({
             let controller = controller.clone();
             let error = error.clone();
@@ -142,11 +171,18 @@ impl ControlWindow {
             enable,
             disable,
             error,
+            dismiss,
         }
     }
     pub fn refresh(&self, controller: &DesktopController) {
         let snapshot = controller.snapshot();
         self.status.set_text(activity_label(snapshot.activity));
+        self.dismiss
+            .set_label(if snapshot.tray == TrayAvailability::Available {
+                "Hide window"
+            } else {
+                "Close window"
+            });
         self.endpoint.set_text(
             &snapshot
                 .endpoint

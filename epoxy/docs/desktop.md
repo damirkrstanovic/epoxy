@@ -15,8 +15,11 @@ A watcher must report an active display host before Epoxy considers the tray ava
 Host changes are checked without cached properties; transient registration rejection
 also enters the retry path, even when watcher ownership does not change.
 
-Tray activation opens one control window. Its menu provides service status, Open
-Epoxy, five minutes of masked diagnostics, Disable diagnostics and Quit. The tray
+Tray activation opens the host-rendered tray menu, without mapping a control
+window. Its menu provides service status, five minutes of masked diagnostics,
+Disable diagnostics and Quit. Advanced diagnostics opens the optional GTK window
+only on explicit selection. The window has a visible Hide window button when a
+tray is available, plus keyboard/window-close dismissal; Quit is a separate action. The tray
 contains no certificate identities, token labels, PINs or document data. Its embedded
 smart-card icon has a light surface and dark outline, supplied as 16/24/32/48 px
 ARGB pixmaps without a theme-dependent icon name. This avoids hosts displaying an

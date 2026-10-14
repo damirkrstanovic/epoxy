@@ -232,3 +232,14 @@ or separately scoped work. Reviewer deferrals concerning browser-disconnect/card
 removal/timeouts, approval without a PIN callback, context selection, certificate
 administration, Origin policy, browser integration and packaging agree with the
 approved feature boundaries and are not hidden completion claims for this PR.
+
+### Menu-first user follow-up
+
+User feedback on 2026-10-14 supersedes click-to-open behavior: routine tray activation
+now asks the host for its menu (`MENU_ON_ACTIVATE`), and Advanced diagnostics is the
+explicit route to the optional GTK controls. A visible Hide/Close button resolves
+Niri's missing window-close affordance. The existing tray-aware close handler still
+hides with a host and requests Quit without one; quitting remains a separate action.
+The original GTK and private-bus activation cases failed before these fixes and pass
+afterward. Certificates plus signing-context selection are explicitly requested as
+the next independent feature, with their own implementation plan and review gate.

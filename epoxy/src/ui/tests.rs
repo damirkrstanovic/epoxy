@@ -65,7 +65,7 @@ fn desktop_widgets_and_pin_lifecycle() {
     app.activate();
     pump();
     assert_eq!(app.windows().len(), 1);
-    control.close();
+    button(&control, "Hide window").emit_clicked();
     pump();
     assert!(!control.is_visible());
     assert!(!controller.shutdown_requested().is_cancelled());

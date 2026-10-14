@@ -11,6 +11,7 @@ struct EpoxyTray {
     registered: Arc<AtomicBool>,
 }
 impl Tray for EpoxyTray {
+    const MENU_ON_ACTIVATE: bool = true;
     fn id(&self) -> String {
         "dev.semyon.epoxy".into()
     }
@@ -44,9 +45,6 @@ impl Tray for EpoxyTray {
             ..Default::default()
         }
     }
-    fn activate(&mut self, _x: i32, _y: i32) {
-        self.ui.show_window();
-    }
     fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
         self.registered.store(false, Ordering::SeqCst);
         self.controller.set_tray(TrayAvailability::Unavailable);
@@ -75,7 +73,7 @@ impl Tray for EpoxyTray {
             }
             .into(),
             StandardItem {
-                label: "Open Epoxy".into(),
+                label: "Advanced diagnostics…".into(),
                 activate: Box::new(|tray: &mut Self| tray.ui.show_window()),
                 ..Default::default()
             }
@@ -291,7 +289,7 @@ mod bus_tests {
             let (diagnostics, _subscriber) =
                 crate::diagnostics::subscriber("info", std::io::sink).unwrap();
             let controller = DesktopController::new(diagnostics);
-            let (ui, _rx) = crate::ui::presentation_channel();
+            let (ui, mut ui_requests) = crate::ui::presentation_channel();
             let tray = start_tray(controller.clone(), ui).unwrap();
             wait_for(&controller, TrayAvailability::Unavailable).await;
             tokio::time::sleep(Duration::from_millis(2200)).await;
@@ -334,9 +332,14 @@ mod bus_tests {
             assert!(pixmaps.iter().all(|(w, h, bytes)| *w > 0
                 && *h > 0
                 && bytes.len() == (*w as usize) * (*h as usize) * 4));
-            item.call::<_, _, ()>("Activate", &(0i32, 0i32))
-                .await
-                .unwrap();
+            let menu_only: bool = item.get_property("ItemIsMenu").await.unwrap();
+            assert!(menu_only, "tray activation must show its menu");
+            let result = item.call::<_, _, ()>("Activate", &(0i32, 0i32)).await;
+            assert!(matches!(result, Err(zbus::Error::MethodError(..))));
+            assert!(
+                ui_requests.try_recv().is_err(),
+                "tray clicks must not request a standalone window"
+            );
             drop(item);
             watcher
                 .release_name("org.kde.StatusNotifierWatcher")
