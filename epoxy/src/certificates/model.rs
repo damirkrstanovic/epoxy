@@ -308,15 +308,25 @@ impl PublicContext {
 /// A display/profile hint ranks contexts, while exact key/slot checks still
 /// enforce identity. Never choose by slot number or guess between candidates.
 pub fn default_signing_certificate(contexts: &[PublicContext]) -> Option<CertificateKey> {
-    let mut candidates = contexts
+    let mut all_eligible = contexts
         .iter()
-        .filter(|c| c.is_signing_context())
         .flat_map(|c| &c.certificates)
         .filter(|c| c.eligibility == Eligibility::Eligible);
-    let key = candidates.next()?.key.clone();
-    if candidates.next().is_some() {
-        return None;
-    }
+    let first = all_eligible.next()?;
+    let key = if all_eligible.next().is_none() {
+        first.key.clone()
+    } else {
+        let mut candidates = contexts
+            .iter()
+            .filter(|c| c.is_signing_context())
+            .flat_map(|c| &c.certificates)
+            .filter(|c| c.eligibility == Eligibility::Eligible);
+        let key = candidates.next()?.key.clone();
+        if candidates.next().is_some() {
+            return None;
+        }
+        key
+    };
     if contexts
         .iter()
         .flat_map(|c| &c.certificates)
@@ -335,7 +345,7 @@ pub fn signing_certificate_title(context: &PublicContext, cert: &PublicCertifica
         if context.is_signing_context() {
             "Digital signing"
         } else {
-            "Other signing certificate"
+            "Signing certificate"
         }
     )
 }

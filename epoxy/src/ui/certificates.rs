@@ -47,7 +47,7 @@ fn details(
     ] {
         body.append(&text(&line));
     }
-    let advanced = gtk4::Expander::new(Some("Advanced"));
+    let advanced = gtk4::Expander::new(Some("Technical details"));
     advanced.set_child(Some(&text(&format!(
         "PIN context: {}; module: {}",
         context.label, context.key.module_name
@@ -85,6 +85,7 @@ pub(super) struct CertificateWindow {
     version: RefCell<Option<(u64, u64)>>,
     refresh_button: Button,
     clear_button: Button,
+    clear_options: gtk4::Expander,
 }
 impl CertificateWindow {
     pub fn new(app: &Application, controller: CertificateController) -> Rc<Self> {
@@ -97,8 +98,8 @@ impl CertificateWindow {
         root.append(&status);
         let refresh_button = Button::with_label("Refresh certificates");
         root.append(&refresh_button);
-        let clear_button = Button::with_label("Choose automatically");
-        let advanced = gtk4::Expander::new(Some("Advanced"));
+        let clear_button = Button::with_label("Forget saved certificate choice");
+        let advanced = gtk4::Expander::new(Some("Saved certificate choice"));
         advanced.set_child(Some(&clear_button));
         root.append(&advanced);
         root.append(&text("Your choice is remembered. PINs are never saved. After changing certificates, reload the portal."));
@@ -113,7 +114,7 @@ impl CertificateWindow {
         root.append(&close);
         let window = ApplicationWindow::builder()
             .application(app)
-            .title("Cards and certificates")
+            .title("Certificates")
             .default_width(560)
             .default_height(560)
             .child(&root)
@@ -127,6 +128,7 @@ impl CertificateWindow {
             version: RefCell::new(None),
             refresh_button,
             clear_button,
+            clear_options: advanced,
         });
         let catalog = view.controller.clone();
         view.refresh_button.connect_clicked(move |_| {
@@ -171,6 +173,7 @@ impl CertificateWindow {
         );
         self.refresh_button.set_sensitive(enabled);
         self.clear_button.set_sensitive(enabled);
+        self.clear_options.set_visible(!snapshot.automatic);
         if *self.version.borrow() != Some((snapshot.generation, snapshot.revision)) {
             self.version
                 .replace(Some((snapshot.generation, snapshot.revision)));
@@ -213,10 +216,10 @@ impl CertificateWindow {
                             .count()
                             == 1
                     {
-                        let label = if selected && snapshot.remembered {
-                            "Using this certificate"
+                        let label = if selected {
+                            "Used for signing"
                         } else {
-                            "Use this certificate"
+                            "Use for signing"
                         };
                         let remember = true;
                         let button = Button::with_label(label);
@@ -234,7 +237,7 @@ impl CertificateWindow {
             }
         }
         for button in self.actions.borrow().iter() {
-            button.set_sensitive(enabled);
+            button.set_sensitive(enabled && button.label().as_deref() != Some("Used for signing"));
         }
     }
 }
