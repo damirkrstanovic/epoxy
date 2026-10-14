@@ -16,17 +16,31 @@ Host changes are checked without cached properties; transient registration rejec
 also enters the retry path, even when watcher ownership does not change.
 
 Tray activation opens the host-rendered tray menu, without mapping a control
-window. Its menu provides service status, “Enable troubleshooting logs (5 minutes)”,
-“Disable troubleshooting logs” and Quit. Troubleshooting request logs mask sensitive
+window. The top-level order is service status, Cards and certificates,
+“Enable troubleshooting logs (5 minutes)”, “Disable troubleshooting logs”, then
+Advanced, then Quit Epoxy. Advanced contains diagnostics, the checked automatic
+certificate-selection mode and technical context details. Troubleshooting request logs mask sensitive
 data and automatically return to normal logging after five minutes. Advanced diagnostics opens the optional GTK window
 only on explicit selection. The window has a visible Hide window button when a
 tray is available, plus keyboard/window-close dismissal; Quit is a separate action. The tray
-contains no certificate identities, token labels, PINs or document data. Its embedded
+shows certificate metadata only inside the explicitly opened Cards and certificates
+submenu. Its tooltip and service status contain no certificate/token identities,
+PINs or document data. Its embedded
 smart-card icon has a light surface and dark outline, supplied as 16/24/32/48 px
 ARGB pixmaps without a theme-dependent icon name. This avoids hosts displaying an
 unrecolored dark symbolic icon on a dark panel. A desktop
 must supply a StatusNotifierItem host to display it; Epoxy does not install or
 configure shell extensions or bars.
+
+Tray popup dismissal and focus restoration belong to the tray host. In
+DankMaterialShell, activating a leaf action starts an 80 ms timer that closes the
+popup, returning focus to the previously focused window. Epoxy's certificate and
+logging actions do not request a GTK window or change window focus. The standard
+tray menu protocol provides no keep-open control. See the
+[DMS tray implementation](https://github.com/AvengeMedia/DankMaterialShell/blob/master/quickshell/Modules/DBar/Widgets/SystemTrayBar.qml).
+
+There is currently no separate Stop/Start service control. Quit Epoxy shuts down
+both the listener and the tray; launch Epoxy again to restart it.
 
 Closing the control window hides it when the tray is available. Without a tray,
 closing it requests Quit. Tray recovery does not hide an open window. Repeated
@@ -46,8 +60,8 @@ opaque native signature already executing cannot be interrupted or undone; it ca
 delay exit, and a signed response is suppressed if shutdown has been requested.
 TTY mode retains its existing terminal input/signal behavior.
 
-This feature does not add a context selector or certificate administration. A
-separate context-selection feature can include a read-only identity/details view.
+[Cards and certificates](certificates.md) provides public certificate details and
+explicit signing-context selection from the tray or the optional GTK certificate view.
 Key generation, imports/deletion, PIN changes and trust administration remain outside
 Epoxy. The existing NSS/XMLSec/OpenSC signing path and protocol are retained.
 
@@ -78,7 +92,9 @@ never the user's session bus, card, PIN or tax data. The six ignored GUI/bus tes
 are run explicitly by that script, not silently treated as covered by `cargo test`.
 The daemon restart test owns a separate temporary bus. The helper smoke test
 checks GET_INFO, dynamic masked tracing/expiry, listener readiness, GUI presentation
-and clean SIGTERM/socket removal without loading NSS.
+and clean SIGTERM/socket removal. It also checks that desktop startup attempts
+exactly one automatic public-certificate scan after listener readiness, using an
+absent synthetic NSS database; backend failure does not stop GET_INFO or diagnostics.
 
 User desktop QA still needs the actual Wayland/X11 desktop and tray host: Open
 Epoxy, diagnostics toggles/expiry, status during PIN entry, cancellation, Quit and

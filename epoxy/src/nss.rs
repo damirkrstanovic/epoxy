@@ -61,6 +61,9 @@ impl Nss {
             )
         };
 
+        if ptr.is_null() {
+            return Err(InitError::Native);
+        }
         Ok(Nss { ptr })
     }
 
@@ -82,6 +85,9 @@ impl Nss {
             return null_mut();
         }
 
+        if token_ptr.is_null() {
+            return null_mut();
+        }
         let token_name = Token::from_raw(token_ptr, false).name();
 
         debug!("requesting native PIN entry");
@@ -93,6 +99,9 @@ impl Nss {
         let pin_buf = pin.as_bytes_with_nul();
         let in_buf_ptr = pin_buf.as_ptr().cast::<c_char>();
         let out_buf_ptr = unsafe { PORT_Alloc(pin_buf.len()) } as *mut c_char;
+        if out_buf_ptr.is_null() {
+            return null_mut();
+        }
         unsafe { ptr::copy_nonoverlapping(in_buf_ptr, out_buf_ptr, pin_buf.len()) };
 
         out_buf_ptr
@@ -118,6 +127,37 @@ impl Nss {
             None
         } else {
             Some(Token::from_raw(ptr, true))
+        }
+    }
+
+    pub fn find_context<'a>(
+        &'a self,
+        key: &crate::certificates::ContextKey,
+    ) -> Result<Token<'a>, crate::certificates::SelectionError> {
+        use crate::certificates::SelectionError;
+        let list = self.get_tokens().ok_or(SelectionError::Unavailable)?;
+        let mut found = None;
+        for token in list.iter() {
+            if token.context_key()? == *key {
+                if found.is_some() {
+                    return Err(SelectionError::Ambiguous);
+                }
+                let ptr = unsafe { PK11_ReferenceSlot(token.ptr) };
+                if ptr.is_null() {
+                    return Err(SelectionError::Unavailable);
+                }
+                found = Some(Token::from_raw(ptr, true));
+            }
+        }
+        found.ok_or(SelectionError::Missing)
+    }
+
+    pub fn list_certificates<'a>(&'a self, token: &'a Token<'a>) -> Option<CertList<'a>> {
+        let ptr = unsafe { PK11_ListCertsInSlot(token.ptr) };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(CertList::from_raw(ptr))
         }
     }
 
@@ -185,6 +225,8 @@ impl Nss {
 pub enum InitError {
     #[error("C interop error")]
     Ffi,
+    #[error("NSS initialization failed")]
+    Native,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -212,40 +254,37 @@ impl<'a> Drop for TokenLogoutGuard<'a> {
 #[error("token auth failed")]
 pub struct TokenAuthError(());
 
-#[derive(Debug)]
-pub struct SecItem(SECItem);
-
-impl Drop for SecItem {
-    fn drop(&mut self) {
-        unsafe { SECITEM_FreeItem(&mut self.0, PR_FALSE as i32) };
-    }
+pub struct SecItem {
+    item: SECItem,
+    bytes: Vec<u8>,
 }
-
-impl Clone for SecItem {
-    fn clone(&self) -> Self {
-        Self::new(&self.0)
-    }
-}
-
 impl AsRef<[u8]> for SecItem {
     fn as_ref(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.0.data, self.0.len as usize) }
+        &self.bytes
     }
 }
-
 impl SecItem {
-    fn new(value: &SECItem) -> SecItem {
-        let mut cloned = SECItem {
+    pub fn from_der_bytes(bytes: Vec<u8>) -> Result<Self, crate::certificates::SelectionError> {
+        if bytes.is_empty() || bytes.len() > 65536 {
+            return Err(crate::certificates::SelectionError::InvalidCertificate);
+        }
+        let item = SECItem {
             type_: SECItemType_siBuffer,
-            data: null_mut(),
-            len: 0,
+            data: bytes.as_ptr() as *mut u8,
+            len: bytes.len() as u32,
         };
-        unsafe { SECITEM_CopyItem(null_mut(), &mut cloned, value) };
-        SecItem(cloned)
+        Ok(Self { item, bytes })
     }
-
+    fn new(value: &SECItem) -> Result<Self, crate::certificates::SelectionError> {
+        if value.data.is_null() || value.len == 0 || value.len > 65536 {
+            return Err(crate::certificates::SelectionError::InvalidCertificate);
+        }
+        Self::from_der_bytes(
+            unsafe { slice::from_raw_parts(value.data, value.len as usize) }.to_vec(),
+        )
+    }
     pub fn as_ptr(&self) -> *const SECItem {
-        &self.0
+        &self.item
     }
 }
 
@@ -272,15 +311,100 @@ impl<'a> Token<'a> {
         }
     }
 
-    pub fn uri(&self) -> TokenUri {
+    pub fn uri(&self) -> Option<TokenUri> {
         let uri_ptr = unsafe { PK11_GetTokenURI(self.ptr as *mut _) };
+        if uri_ptr.is_null() {
+            return None;
+        }
         let uri = unsafe { CStr::from_ptr(uri_ptr).to_owned() };
         unsafe { PORT_Free(uri_ptr as *mut c_void) }; // `PK11_GetTokenURI` allocates string
-        TokenUri(uri)
+        Some(TokenUri(uri))
+    }
+
+    pub fn context_key(
+        &self,
+    ) -> Result<crate::certificates::ContextKey, crate::certificates::SelectionError> {
+        use crate::certificates::{ContextKey, SelectionError};
+        let module = unsafe { PK11_GetModule(self.ptr) };
+        if module.is_null() {
+            return Err(SelectionError::Unavailable);
+        }
+        // Borrowed module fields are copied while this slot reference is alive.
+        let name = unsafe { (*module).commonName };
+        if name.is_null() {
+            return Err(SelectionError::Unavailable);
+        }
+        let module_name = unsafe { CStr::from_ptr(name) }
+            .to_str()
+            .map_err(|_| SelectionError::Unavailable)?
+            .to_owned();
+        let library = unsafe { (*module).dllName };
+        let module_library = if library.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(library) }
+                    .to_str()
+                    .map_err(|_| SelectionError::Unavailable)?
+                    .to_owned(),
+            )
+        };
+        let uri = self.uri().ok_or(SelectionError::Unavailable)?;
+        let mut info: CK_TOKEN_INFO = unsafe { std::mem::zeroed() };
+        if unsafe { PK11_GetTokenInfo(self.ptr, &mut info) } != _SECStatus_SECSuccess
+            || !crate::certificates::uri_matches_info(
+                uri.0.as_bytes(),
+                [
+                    &info.label,
+                    &info.manufacturerID,
+                    &info.serialNumber,
+                    &info.model,
+                ],
+            )
+        {
+            return Err(SelectionError::Missing);
+        }
+        Ok(ContextKey {
+            module_name,
+            module_library,
+            token_uri: uri.0.as_bytes().to_vec(),
+        })
+    }
+    pub fn identity(
+        &self,
+    ) -> Result<crate::certificates::TokenIdentity, crate::certificates::SelectionError> {
+        if unsafe { PK11_IsPresent(self.ptr) } == 0 {
+            return Err(crate::certificates::SelectionError::Missing);
+        }
+        let series = unsafe { PK11_GetSlotSeries(self.ptr) };
+        let context = self.context_key()?;
+        if series != unsafe { PK11_GetSlotSeries(self.ptr) } {
+            return Err(crate::certificates::SelectionError::Stale);
+        }
+        Ok(crate::certificates::TokenIdentity { context, series })
+    }
+    pub fn needs_login(&self) -> bool {
+        unsafe { PK11_NeedLogin(self.ptr) != 0 }
+    }
+
+    pub(crate) fn matches_private_key(&self, key: *mut SECKEYPrivateKey) -> bool {
+        if key.is_null() {
+            return false;
+        }
+        // NSS returns a referenced slot; always release it, even on mismatch.
+        let slot = unsafe { PK11_GetSlotFromPrivateKey(key) };
+        if slot.is_null() {
+            return false;
+        }
+        let actual = Self::from_raw(slot, true);
+        self.ptr == actual.ptr
     }
 
     pub fn name(&self) -> String {
         let token_name_ptr = unsafe { PK11_GetTokenName(self.ptr as *mut _) };
+        if token_name_ptr.is_null() {
+            return "Unnamed PIN context".into();
+        }
         unsafe { CStr::from_ptr(token_name_ptr).to_string_lossy().to_string() }
     }
 
@@ -368,7 +492,7 @@ impl<'a> Cert<'a> {
         }
     }
 
-    pub fn der(&self) -> SecItem {
+    pub fn der(&self) -> Result<SecItem, crate::certificates::SelectionError> {
         SecItem::new(&unsafe { *self.ptr }.derCert)
     }
 }
@@ -450,6 +574,57 @@ impl<'a> Iterator for CertListIter<'a> {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn failed_initialization_never_constructs_a_null_native_context() {
+        assert!(Nss::initialize("sql:/nonexistent/epoxy-synthetic-invalid-db".into()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires scripts/test-certificates-native.sh private synthetic NSS fixture"]
+    fn xmlsec_key_slot_is_checked_and_all_references_are_released() {
+        let db =
+            std::env::var("EPOXY_SYNTHETIC_NSS_DB").expect("private synthetic database required");
+        let der_path = std::env::var("EPOXY_SYNTHETIC_CERT_DER").expect("synthetic DER required");
+        let output =
+            std::env::var("EPOXY_SYNTHETIC_SIGNED_XML").expect("synthetic output required");
+        let nss = std::mem::ManuallyDrop::new(Nss::initialize(format!("sql:{db}")).unwrap());
+        {
+            let good = Token::from_raw(unsafe { PK11_GetInternalKeySlot() }, true);
+            let wrong = Token::from_raw(unsafe { PK11_GetInternalSlot() }, true);
+            assert!(!good.ptr.is_null() && !wrong.ptr.is_null() && good.ptr != wrong.ptr);
+            let identity = good.identity().unwrap();
+            identity
+                .ensure_unchanged(&good.identity().unwrap())
+                .unwrap();
+            let xmlsec = crate::xmlsec::XmlSec::initialize().unwrap();
+            let der = SecItem::from_der_bytes(std::fs::read(der_path).unwrap()).unwrap();
+            let signer = crate::xmlsec::XmlSigner::with_cert(&xmlsec, &der).unwrap();
+            for _ in 0..100 {
+                assert!(signer.matches_token(&good));
+                assert!(!signer.matches_token(&wrong));
+            }
+            let mut doc = libxml::parser::Parser::default()
+                .parse_string("<synthetic>native fixture</synthetic>")
+                .unwrap();
+            signer.sign(&mut doc).unwrap();
+            std::fs::write(output, doc.to_string()).unwrap();
+        }
+        // NSS refuses shutdown with leaked references: this catches missing drops
+        // of the XMLSec key copy or PK11_GetSlotFromPrivateKey's referenced slot.
+        assert_eq!(
+            unsafe { NSS_ShutdownContext(nss.ptr) },
+            _SECStatus_SECSuccess
+        );
+    }
+}
+
+#[cfg(test)]
 mod portability_tests {
     use super::*;
 
@@ -468,7 +643,7 @@ mod portability_tests {
                 data: bytes.as_mut_ptr(),
                 len: bytes.len().try_into().unwrap(),
             };
-            let der = SecItem::new(&raw);
+            let der = SecItem::new(&raw).unwrap();
             let xmlsec = crate::xmlsec::XmlSec::initialize().unwrap();
             for _ in 0..10 {
                 let signer = crate::xmlsec::XmlSigner::with_cert(&xmlsec, &der).unwrap();

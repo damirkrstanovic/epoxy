@@ -1,3 +1,5 @@
+#[cfg(feature = "tray")]
+mod certificate_menu;
 mod state;
 pub use state::*;
 

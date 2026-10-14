@@ -1,4 +1,4 @@
-"""Real helper startup/handshake/shutdown on a synthetic desktop; no NSS/token access."""
+"""Real helper startup/handshake/shutdown on a synthetic desktop; missing synthetic NSS database, no real token/PIN access."""
 import base64
 import json
 import os
@@ -38,7 +38,8 @@ for run in range(3):
             os.chmod(logfile, 0o600)
             start = time.monotonic()
             process = subprocess.Popen([binary, '--config-path', str(Path(directory) / 'absent.toml'),
-                '--nssdb-path', str(Path(directory) / 'must-not-be-opened'), '--endpoint', '127.0.0.1:0',
+                '--selection-path', str(Path(directory) / 'app/selection.json'),
+                '--nssdb-path', str(Path(directory) / 'absent-synthetic-nss-db'), '--endpoint', '127.0.0.1:0',
                 '--pin-prompt', 'ui', '--log', 'debug'] + (['--show-window'] if run else []),
                 env=env, stdout=subprocess.DEVNULL, stderr=output)
             observed = []
@@ -99,8 +100,12 @@ for run in range(3):
                 for secret in ['synthetic-secret', 'synthetic-host', 'synthetic-pin']:
                     assert secret not in contents
                 assert 'NSS initialized' not in contents
+                scans = [line for line in contents.splitlines()
+                         if 'certificate control received' in line and 'certificate_refresh' in line]
+                assert len(scans) == 1, 'desktop startup must discover certificates once without a user/portal request'
+                assert contents.index('listening on') < contents.index('certificate control received')
                 assert 'service stopped' in contents
-                print(f'PASS run {run + 1}: readiness={ready_ms:.1f}ms handshake={handshake_ms:.1f}ms; first presentation request={window_ms:.1f}ms; clean SIGTERM; no NSS/PIN access')
+                print(f'PASS run {run + 1}: readiness={ready_ms:.1f}ms handshake={handshake_ms:.1f}ms; first presentation request={window_ms:.1f}ms; clean SIGTERM; automatic discovery attempted; no real token/PIN access')
             finally:
                 if process.poll() is None:
                     process.kill()

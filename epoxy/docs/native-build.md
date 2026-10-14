@@ -14,13 +14,14 @@ XMLSec 1.2's certificate loader only obtains a public key. Epoxy explicitly look
 up the associated NSS private-key handle after authentication and attaches it to
 the XMLSec key. This also runs on newer XMLSec, removing dependence on the
 certificate loader's changing behavior. The key material remains in NSS/the card.
-Failure to obtain a private key fails closed. Exact token/key-slot enforcement
-is a separate signing-context change, not part of this portability patch.
+The server still checks that the resulting key belongs to the selected token
+before signing. Failure to obtain a private key fails closed.
 
 Reference ownership follows the NSS/XMLSec APIs: certificate references are
 released, key references transfer once to XMLSec on successful adoption, and
-failure paths release their owners. The synthetic native test signs repeatedly, then requires clean NSS shutdown
-(which fails on leaked references). Its certificate/key are generated in an isolated NSS
+failure paths release their owners. The synthetic native test checks correct and
+incorrect slots repeatedly, signs, then requires clean NSS shutdown (which fails
+on leaked references). Its certificate/key are generated in an isolated NSS
 database to avoid differences in PKCS#12 encodings across distro tools.
 
 Validation during development: the original hard-coded 1.3 check failed on
