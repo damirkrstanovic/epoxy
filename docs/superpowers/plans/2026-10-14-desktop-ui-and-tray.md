@@ -1,6 +1,6 @@
 # Desktop UI and Tray Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans for the existing native execution workflow. Implement task-by-task, with an independent whole-branch review at the end. The human must review this written plan before product changes.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans for the existing native execution workflow. Implement task-by-task, with an independent whole-branch review at the end. The human reviewed and approved this plan and its clarified scope on 2026-10-14.
 
 **Goal:** Add a useful native GTK control window and system tray while retaining the tested OpenSC signing path and making PIN dismissal and Quit reliable.
 
@@ -179,3 +179,36 @@ The desktop build presents a working tray and control window (or a usable window
 - https://docs.rs/ksni/latest/ksni/trait.Tray.html (`watcher_offline`: return false shuts the service down)
 - https://docs.rs/ksni/0.3.6/ksni/struct.TrayServiceBuilder.html (late watcher support)
 - Existing GTK4 0.10 source/API and the user's successful native PIN-dialog run; do not upgrade to the newer docs.rs latest GTK version as part of this feature.
+
+## Execution evidence (2026-10-14)
+
+Implemented inline on `codex/desktop-ui`, based on diagnostics PR #2. The existing
+local diagnostics binary/NSS fixture remains intact. No context-selector, PIN cache,
+certificate manager, browser companion or backend migration is included.
+
+- Desktop lifecycle guards: four red→green tests for pending PIN, shutdown priority,
+  cancellation versus authentication failure, concurrent connections and RAII cleanup.
+- Reply ownership: two red→green tests for exactly-once cancellation/submit/drop.
+- GTK regression: original window-close timed out; new paths pass for Enter, Continue,
+  Escape, Cancel, close, Quit with a blocking synthetic callback, repeated activation,
+  coalesced presentation and diagnostics during a prompt.
+- Tray menu regression: actions now control the existing diagnostics/controller.
+- Private-bus checks pass for a watcher appearing after 2.2 seconds, watcher restart,
+  bounded nonresponding registration, shutdown during backoff and full bus restart.
+  ksni swallows update failures after bus disconnect; a separate zbus close monitor
+  fixes the reproduced stale Available state. Failed attempts drop their own runtimes.
+- Queued-signing regression originally initialized NSS after shutdown; it now returns
+  the compatible error without invoking native initialization. Connection accounting
+  is verified over a real synthetic WebSocket handshake.
+- Default workspace: 38 automatic tests pass; four GUI/bus tests run separately.
+  CLI-only: 35 tests pass. GTK without tray: 37 automatic tests pass, GUI test separate.
+  Application-only Clippy with `--all-targets --no-deps -D warnings` passes in all three
+  configurations; generated NSS bindings retain the previously established workspace
+  strict-Clippy limitations. Formatting passes.
+- Debug-build synthetic X11/Xvfb/private-bus startup, fresh processes with OS caches
+  uncontrolled: listener 37.2/31.6/31.6 ms; first GET_INFO completed 44.4/32.5/32.4 ms.
+  First presentation request: 2221.5 ms for missing-tray fallback; 161.2/160.2 ms with
+  `--show-window`. Presentation requests are measured separately from rendered frame
+  timing; these are not cold filesystem-cache benchmarks. No NSS/card/PIN access.
+- Actual Niri/Wayland tray rendering and user-run ESS portal checks remain manual QA.
+  Native-library transient PIN buffers are unchanged; no compliance claim is made.

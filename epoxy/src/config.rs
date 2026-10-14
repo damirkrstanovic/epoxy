@@ -219,9 +219,11 @@ mod tests {
     use super::*;
     #[test]
     fn show_window_requires_gui_prompt_and_honors_config_precedence() {
-        let mut config = Config::default();
-        config.pin_prompt = PinPromptKind::Tty;
-        config.show_window = true;
+        let mut config = Config {
+            pin_prompt: PinPromptKind::Tty,
+            show_window: true,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
         config.show_window = false;
         assert!(config.validate().is_ok());

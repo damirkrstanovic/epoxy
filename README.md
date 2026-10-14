@@ -2,6 +2,10 @@
 
 SmartBox-compatible open source tool for signing ePorezi tax forms.
 
+The default desktop build includes native GTK controls and a system tray. Use
+`epoxy --show-window` to open the controls immediately. See [desktop controls](epoxy/docs/desktop.md)
+for tray fallback, PIN cancellation, diagnostics and verification.
+
 ## DISCLAIMER
 
 This tool is provided as-is under the MIT License. Please note:
@@ -49,7 +53,7 @@ Only Linux systems are currently supported.
 - `libnss3`
 - `libxml2`
 - `libxmlsec1`
-- `gtk4` (for `ui-gtk4` feature)
+- `gtk4` (for `ui-gtk` feature)
 
 ### Install PKCS#11 module
 

@@ -130,6 +130,7 @@ fn build_application(
     show_window: bool,
     ct: CancellationToken,
 ) -> Application {
+    let ui_started = Instant::now();
     let app = Application::builder()
         .application_id("dev.semyon.epoxy")
         .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
@@ -153,6 +154,11 @@ fn build_application(
         control.replace(Some(controls.clone()));
         if show_window {
             controls.window.present();
+            tracing::debug!(
+                elapsed_ms = ui_started.elapsed().as_millis() as u64,
+                reason = "requested",
+                "desktop window presented"
+            );
         }
         let app_weak = app.downgrade();
         let pending_pin = pending.clone();
@@ -217,6 +223,11 @@ fn build_application(
                 && refresh_controller.snapshot().tray != TrayAvailability::Available
             {
                 controls.window.present();
+                tracing::debug!(
+                    elapsed_ms = ui_started.elapsed().as_millis() as u64,
+                    reason = "tray_unavailable",
+                    "desktop window presented"
+                );
                 fallback_shown = true;
             }
             glib::ControlFlow::Continue

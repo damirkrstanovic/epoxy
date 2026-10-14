@@ -109,6 +109,17 @@ fn desktop_widgets_and_pin_lifecycle() {
         assert!(window.is_visible());
         let focused = gtk4::prelude::GtkWindowExt::focus(&window).unwrap();
         assert!(focused == entry.clone().upcast::<Widget>() || focused.is_ancestor(&entry));
+        if action == "close"
+            && let Ok(path) = std::env::var("EPOXY_UI_CAPTURE")
+        {
+            assert!(
+                std::process::Command::new("import")
+                    .args(["-window", "root", &path])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
         entry.set_text("synthetic-secret");
         // Diagnostic controls remain usable while a PIN is pending.
         button(&control, "Enable diagnostics").emit_clicked();
