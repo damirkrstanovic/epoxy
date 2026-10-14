@@ -350,12 +350,43 @@ impl<'a> Token<'a> {
             )
         };
         let uri = self.uri().ok_or(SelectionError::Unavailable)?;
+        let mut info: CK_TOKEN_INFO = unsafe { std::mem::zeroed() };
+        if unsafe { PK11_GetTokenInfo(self.ptr, &mut info) } != _SECStatus_SECSuccess
+            || !crate::certificates::uri_matches_info(
+                uri.0.as_bytes(),
+                [
+                    &info.label,
+                    &info.manufacturerID,
+                    &info.serialNumber,
+                    &info.model,
+                ],
+            )
+        {
+            return Err(SelectionError::Missing);
+        }
         Ok(ContextKey {
             module_name,
             module_library,
             token_uri: uri.0.as_bytes().to_vec(),
         })
     }
+    pub fn identity(
+        &self,
+    ) -> Result<crate::certificates::TokenIdentity, crate::certificates::SelectionError> {
+        if unsafe { PK11_IsPresent(self.ptr) } == 0 {
+            return Err(crate::certificates::SelectionError::Missing);
+        }
+        let series = unsafe { PK11_GetSlotSeries(self.ptr) };
+        let context = self.context_key()?;
+        if series != unsafe { PK11_GetSlotSeries(self.ptr) } {
+            return Err(crate::certificates::SelectionError::Stale);
+        }
+        Ok(crate::certificates::TokenIdentity { context, series })
+    }
+    pub fn needs_login(&self) -> bool {
+        unsafe { PK11_NeedLogin(self.ptr) != 0 }
+    }
+
     pub(crate) fn matches_private_key(&self, key: *mut SECKEYPrivateKey) -> bool {
         if key.is_null() {
             return false;
@@ -567,6 +598,10 @@ mod native_tests {
             let good = Token::from_raw(unsafe { PK11_GetInternalKeySlot() }, true);
             let wrong = Token::from_raw(unsafe { PK11_GetInternalSlot() }, true);
             assert!(!good.ptr.is_null() && !wrong.ptr.is_null() && good.ptr != wrong.ptr);
+            let identity = good.identity().unwrap();
+            identity
+                .ensure_unchanged(&good.identity().unwrap())
+                .unwrap();
             let xmlsec = crate::xmlsec::XmlSec::initialize().unwrap();
             let der = SecItem::from_der_bytes(std::fs::read(der_path).unwrap()).unwrap();
             let signer = crate::xmlsec::XmlSigner::with_cert(&xmlsec, &der).unwrap();

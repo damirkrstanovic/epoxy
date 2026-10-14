@@ -220,3 +220,63 @@ pub fn selection_status_text(snapshot: &super::CertificateSnapshot) -> &'static 
         "Selected for this session; PIN is never saved"
     }
 }
+
+#[derive(Clone)]
+pub struct TokenIdentity {
+    pub context: ContextKey,
+    pub series: i32,
+}
+impl TokenIdentity {
+    pub fn ensure_unchanged(&self, current: &Self) -> Result<(), SelectionError> {
+        if self.series != current.series || self.context != current.context {
+            Err(SelectionError::Stale)
+        } else {
+            Ok(())
+        }
+    }
+}
+/// NSS formats these four attributes from its cached token info. Compare their
+/// decoded bytes with a fresh C_GetTokenInfo result before trusting that URI.
+pub(crate) fn uri_matches_info(uri: &[u8], fields: [&[u8]; 4]) -> bool {
+    let names: [&[u8]; 4] = [b"token", b"manufacturer", b"serial", b"model"];
+    let Some(path) = uri.strip_prefix(b"pkcs11:") else {
+        return false;
+    };
+    let mut found: [Option<Vec<u8>>; 4] = [None, None, None, None];
+    for attribute in path.split(|b| *b == b';').filter(|a| !a.is_empty()) {
+        let Some(equal) = attribute.iter().position(|b| *b == b'=') else {
+            return false;
+        };
+        let Some(index) = names.iter().position(|n| *n == &attribute[..equal]) else {
+            return false;
+        };
+        if found[index].is_some() {
+            return false;
+        }
+        let mut value = vec![];
+        let mut input = &attribute[equal + 1..];
+        while let Some((&b, rest)) = input.split_first() {
+            if b == b'%' {
+                if rest.len() < 2 {
+                    return false;
+                }
+                let Some(high) = (rest[0] as char).to_digit(16) else {
+                    return false;
+                };
+                let Some(low) = (rest[1] as char).to_digit(16) else {
+                    return false;
+                };
+                value.push((high * 16 + low) as u8);
+                input = &rest[2..];
+            } else {
+                value.push(b);
+                input = rest;
+            }
+        }
+        found[index] = Some(value);
+    }
+    fields.into_iter().enumerate().all(|(i, field)| {
+        let length = field.iter().rposition(|b| *b != b' ').map_or(0, |n| n + 1);
+        found[i].as_deref().unwrap_or(b"") == &field[..length]
+    })
+}

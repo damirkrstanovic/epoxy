@@ -12,7 +12,7 @@
 
 ## Branch and PR
 
-Worktree `/home/damirk/Downloads/ESS/epoxy-certificates`, branch `codex/certificate-selection`, starting at desktop revision `824ef84`. This is an independent feature PR stacked on desktop PR #3 while it remains open. Its diff must not repeat desktop/diagnostics implementation changes. Only the user's fork receives a PR; no merge or upstream submission.
+Worktree `/home/damirk/Downloads/ESS/epoxy-certificates`, branch `codex/certificate-selection`, initially based on desktop revision `824ef84`, with prerequisite updates merged through `c2cfc73`. This is an independent feature PR stacked on desktop PR #3 while it remains open. Its diff must not repeat desktop/diagnostics implementation changes. Only the user's fork receives a PR; no merge or upstream submission.
 
 ## Global constraints
 
@@ -134,7 +134,7 @@ Define `synthetic_certificate` in test utilities with literal eligible validity/
 - [x] Verify default, CLI-only and GTK-only workspace suites, formatting and application Clippy. Confirm startup/GET_INFO still avoids native initialization; verify request logging remains masked after discovery/selection.
 - [x] Run all affected isolated GUI/bus tests; inspect long labels at 100%/200%. Extend synthetic portal flow to cover selection revisions and same-subject/different-context aliases.
 - [x] Preserve the working desktop helper and build a separate certificate test helper using the existing isolated OpenSC database/preferences path. No real PIN/identity/DER/XML is committed or sent in a PR.
-- [ ] Independent whole-branch review, then one failing-test-first fix pass for Important/Critical findings. Publish only to the user's fork, identifying desktop PR #3 as prerequisite. Keep actual card acceptance pending user interaction rather than declaring it covered by synthetic tests.
+- [x] Independent whole-branch review, then one failing-test-first fix pass for Important/Critical findings. Publish only to the user's fork, identifying desktop PR #3 as prerequisite. Keep actual card acceptance pending user interaction rather than declaring it covered by synthetic tests.
 - [ ] User acceptance: refresh the ESS card's two contexts, inspect issuer/expiry/purpose, select Digital Signature by identity, reload portal certificates, sign manually in the test portal, test reconnect/restart, remove/reinsert card and confirm no fallback/wrong-key signing. The PIN remains native and uncached.
 
 ## Self-review
@@ -143,10 +143,40 @@ Scope maps to the user's confirmed functions. Native catalog, selected key enfor
 
 ## Implementation evidence (2026-10-14)
 
-- Default: 60 automatic tests (52 library + 8 server). CLI-only: 53; GTK-only: 55.
+- Default after review fixes: 63 automatic tests (55 library + 8 server). CLI-only: 56; GTK-only: 58.
 - Eight explicit native/GTK/bus cases run separately, including Unicode plain-text details, session/remember/clear actions, Busy, Close/Escape and tray recovery. Synthetic long-label screenshots inspected at 100%/200%; list summaries were shortened and details remain scrollable.
 - Synthetic NSS RSA key: correct/wrong XMLSec slot checks repeated 100 times; clean NSS shutdown; generated XML signature verified by xmlsec1. No real card accessed.
 - Dynamic request tracing remains masked after catalog/selection, including an unlisted signing alias rejected before NSS initialization. Certificate-control operation logs include fixed operation/error enums and duration, without identity values.
 - Three fresh debug processes: listener about 31.5 ms; GET_INFO handshake about 32–36 ms, with nonexistent NSS path. No native initialization or PIN access; clean SIGTERM. These are fresh-process measurements with uncontrolled OS caches, not filesystem-cold benchmarks.
 - Private user test launcher is separate from the preserved desktop build and uses the existing isolated OpenSC NSS database plus an isolated preference path. Actual ESS test-portal signing/reconnect/removal acceptance remains user-operated.
 - External private-only software-token authentication behavior is not covered by the internal NSS key fixture (SoftHSM unavailable).
+
+## Final independent review
+
+The reviewer found no Critical/Minor issues and two Important issues. Both were
+fixed with RED→GREEN regressions: card replacement during native PIN entry now
+checks fresh token information and slot series after authentication and before
+signing; public discovery enumerates visible certificates without authentication
+instead of assuming NSS’s friendly hint establishes public visibility. The entire
+suite is green; the synthetic native signature still verifies and NSS shuts down
+cleanly. No automatic merge or upstream submission is requested.
+
+Review rulings and limits (the cost is the behavior not established/implemented):
+
+- Actual ESS login/declaration/reconnect/removal acceptance — remains user-operated, no real card accessed — cost if wrong: live ESS compatibility is not established by synthetic tests.
+
+- ESS per-use PIN/CKA_ALWAYS_AUTHENTICATE counts — preserve native policy without caching, verify on the actual card — cost if wrong: native prompt/consent behavior may differ from the software-token fixture.
+
+- External private-only SoftHSM behavior — fixture unavailable; explicit limitation, public nonfriendly regression added — cost if wrong: private-object visibility/login/logout differences remain unverified.
+
+- Browser Origin and PIN integration — separate approved feature, no scope expansion — cost if wrong: inherited browser boundary limitations remain.
+
+- Independent signature approval/document purpose — separate approved feature, no scope expansion — cost if wrong: inherited native authorization behavior remains.
+
+- Browser disconnect/timeout during blocked native PIN work — inherited lifecycle outside this feature; existing Quit checks retained — cost if wrong: abandoning a browser request may still require native cancellation/Quit.
+
+- Portable native setup, provider installation and packaging — separate approved features — cost if wrong: installation still depends on current native library/NSS setup.
+
+- Certificate administration, trust/revocation and additional algorithms — expressly excluded, current eligibility is usability metadata — cost if wrong: the view cannot establish trust/qualification or administer certificates.
+
+- Unrelated prerequisite diagnostics/tray behavior — previously reviewed outside this diff; integration tests retained — cost if wrong: this review does not independently establish all prerequisite behavior.

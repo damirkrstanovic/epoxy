@@ -153,3 +153,58 @@ fn missing_remembered_selection_never_falls_back_to_an_available_card() {
     );
     assert!(controller.snapshot().selected == Some(a.key));
 }
+#[test]
+fn replacement_during_authentication_never_reuses_the_old_context_even_with_equal_der() {
+    let a = cert(b"card-a", 1);
+    let b = cert(b"card-b", 1);
+    let original = TokenIdentity {
+        context: a.key.context.clone(),
+        series: 10,
+    };
+    let replaced = TokenIdentity {
+        context: b.key.context.clone(),
+        series: 11,
+    };
+    let same_uri_new_incarnation = TokenIdentity {
+        context: a.key.context.clone(),
+        series: 12,
+    };
+    let mut signed = 0;
+    for current in [&replaced, &same_uri_new_incarnation] {
+        if original.ensure_unchanged(current).is_ok() {
+            signed += 1;
+        }
+    }
+    assert_eq!(
+        signed, 0,
+        "the same slot pointer/certificate must not authorize a replacement card"
+    );
+    assert!(
+        original
+            .ensure_unchanged(&TokenIdentity {
+                context: a.key.context,
+                series: 10
+            })
+            .is_ok()
+    );
+}
+#[test]
+fn cached_uri_must_match_fresh_token_information_bytes() {
+    let uri = b"pkcs11:model=Model;manufacturer=Synthetic;serial=001;token=Signature%20PIN";
+    assert!(uri_matches_info(
+        uri,
+        [b"Signature PIN ", b"Synthetic ", b"001 ", b"Model "]
+    ));
+    assert!(!uri_matches_info(
+        uri,
+        [b"Signature PIN ", b"Synthetic ", b"002 ", b"Model "]
+    ));
+    assert!(!uri_matches_info(
+        b"pkcs11:token=Signature%2",
+        [b"Signature PIN", b"", b"", b""]
+    ));
+    assert!(!uri_matches_info(
+        b"pkcs11:token=Signature%20PIN;token=Signature%20PIN",
+        [b"Signature PIN", b"", b"", b""]
+    ));
+}

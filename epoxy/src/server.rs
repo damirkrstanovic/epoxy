@@ -440,7 +440,16 @@ where
 
         // here PIN will be requested only if the token doesn't allow passwordless access to certs
         let pin_context = self.get_pin_context(None, String::from("List certificates"));
-        let Ok(certs) = nss.get_certs_in_token(&pin_context, &token) else {
+        let public = nss.list_certificates(&token);
+        let readable = public
+            .as_ref()
+            .is_some_and(|list| list.iter().next().is_some());
+        let listed = if readable {
+            Ok(public)
+        } else {
+            nss.get_certs_in_token(&pin_context, &token)
+        };
+        let Ok(certs) = listed else {
             warn!(
                 error_kind = "authentication_failed",
                 "token authentication failed"
@@ -528,8 +537,14 @@ where
         let Ok(token) = nss.find_context(&record.key.context) else {
             return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
         };
+        let Ok(identity) = token.identity() else {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        };
+        if identity.context != record.key.context {
+            return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+        }
         let Ok(metadata) =
-            PublicCertificate::from_der(record.key.context.clone(), record.der.as_ref())
+            PublicCertificate::from_der(identity.context.clone(), record.der.as_ref())
         else {
             return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
         };
@@ -560,6 +575,16 @@ where
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             };
 
+            let Ok(current) = token.identity() else {
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            };
+            if identity.ensure_unchanged(&current).is_err() {
+                warn!(
+                    error_kind = "token_replaced",
+                    "Card changed during authorization; reload certificates"
+                );
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            }
             // Re-read from the selected live slot after authentication. A global
             // certificate cache must not keep a removed/replaced card eligible.
             let Some(live_certs) = nss.list_certificates(&token) else {
@@ -569,11 +594,8 @@ where
                 live_certs
                     .iter()
                     .filter_map(|c| {
-                        PublicCertificate::from_der(
-                            record.key.context.clone(),
-                            c.der().ok()?.as_ref(),
-                        )
-                        .ok()
+                        PublicCertificate::from_der(current.context.clone(), c.der().ok()?.as_ref())
+                            .ok()
                     })
                     .collect(),
             );
@@ -593,6 +615,17 @@ where
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             }
             if self.desktop.shutdown_requested().is_cancelled() {
+                return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
+            }
+            if token
+                .identity()
+                .and_then(|now| identity.ensure_unchanged(&now))
+                .is_err()
+            {
+                warn!(
+                    error_kind = "token_replaced",
+                    "Card changed before signing; reload certificates"
+                );
                 return ResultResponse::error(responses::GetSignedXmlErrorCode::GenericError);
             }
             let Ok(()) = signer.sign(&mut document) else {

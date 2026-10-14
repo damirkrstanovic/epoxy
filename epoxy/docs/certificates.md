@@ -2,7 +2,8 @@
 
 Open **Cards and certificates** from the tray, then choose **Refresh**. Opening
 this menu does not access the card. Refresh reads public certificate metadata
-without accepting a PIN. A context that hides its certificates behind login is
+without authentication, regardless of NSS’s friendly configuration hint. A context
+that hides its certificates behind login is
 shown as requiring authentication; it can still be chosen through the portal's
 ordinary certificate flow, using Epoxy's native PIN dialog.
 
@@ -60,7 +61,9 @@ Identity is module name/library, exact token URI bytes and certificate DER SHA-2
 slot number, list order and subject name are not selection keys. Each connection's
 aliases carry a selection revision and are never reused after relisting. Before
 signing, Epoxy resolves the live context, rechecks certificate validity/presence and
-checks XMLSec's actual private-key slot. A wrong-slot global key lookup is rejected.
+checks XMLSec's actual private-key slot. Token identity/slot incarnation is checked
+after authentication and again immediately before signing; cached URI fields must
+match a fresh C_GetTokenInfo result. A replaced card is rejected even with identical DER. A wrong-slot global key lookup is rejected.
 
 [NSS's slot accessor](https://github.com/mozilla/nss/blob/master/lib/pk11wrap/pk11akey.c)
 returns a referenced slot, and [XMLSec's private-key accessor](https://github.com/lsh123/xmlsec/blob/master/src/nss/pkikeys.c)
