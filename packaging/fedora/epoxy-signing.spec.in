@@ -1,0 +1,57 @@
+Name:           epoxy-signing
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Smart-card signing helper for ePorezi
+# Application and conservative bundled Rust license expressions; notices are
+# shipped in third-party-licenses. This is an upstream RPM recipe, not a claim
+# of approval for inclusion in the Fedora repositories.
+License:        @BUNDLED_LICENSES@
+URL:            https://github.com/semyon2105/epoxy
+Source0:        %{name}-%{version}.tar.xz
+ExclusiveArch:  x86_64
+BuildRequires:  cargo >= 1.89
+BuildRequires:  rust >= 1.89
+BuildRequires:  gcc gcc-c++ clang-devel pkgconf-pkg-config
+BuildRequires:  gtk4-devel nss-devel nspr-devel libxml2-devel xmlsec1-nss-devel libtool-ltdl-devel
+BuildRequires:  desktop-file-utils nss-tools xmlsec1 xmlsec1-openssl
+Requires:       opensc pcsc-lite ccid
+Conflicts:      epoxy epoxy-git
+%global debug_package %{nil}
+
+%description
+SmartBox-compatible ePorezi signing with GTK PIN entry, tray controls, and
+OpenSC smart-card support. Runs as the desktop user. No service is enabled by
+installation. Rust dependencies are vendored; native libraries are system ones.
+
+%prep
+%autosetup -n %{name}-%{version}
+
+%build
+export CARGO_TARGET_DIR=target
+cargo build --frozen --release -p epoxy
+
+%check
+desktop-file-validate packaging/common/dev.semyon.epoxy.desktop
+cargo test --frozen --release -p epoxy --lib
+EPOXY_TEST_PROFILE=release scripts/test-certificates-native.sh
+
+%install
+packaging/install.sh "%{buildroot}" target/release/epoxy
+
+%files
+%{_bindir}/epoxy
+%{_datadir}/applications/dev.semyon.epoxy.desktop
+%{_datadir}/icons/hicolor/scalable/apps/epoxy-signing.svg
+%{_prefix}/lib/systemd/user/epoxy.service
+%{_prefix}/lib/systemd/user/epoxy.socket
+%dir %{_datadir}/doc/epoxy-signing
+%license %{_datadir}/doc/epoxy-signing/LICENSE
+%license %{_datadir}/doc/epoxy-signing/third-party-licenses
+%doc %{_datadir}/doc/epoxy-signing/README.md
+%doc %{_datadir}/doc/epoxy-signing/THIRD_PARTY.md
+%doc %{_datadir}/doc/epoxy-signing/PACKAGING.md
+%doc %{_datadir}/doc/epoxy-signing/guide
+
+%changelog
+* Thu Oct 15 2026 Epoxy contributors <noreply@github.com> - 0.5.0-1
+- Initial upstream native package.

@@ -1,0 +1,54 @@
+name: Native Linux packages
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal && rustup default 1.95.0
+      - name: Create vendored source and license bundle
+        run: python3 packaging/make-source.py dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-and-recipes
+          path: dist/*
+  packages:
+    needs: source
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: arch-x86_64
+            image: archlinux:base-devel
+          - name: fedora44-x86_64
+            image: fedora:44
+          - name: debian13-amd64
+            image: debian:13
+          - name: ubuntu24.04-amd64
+            image: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-and-recipes
+          path: dist
+      - name: Build distribution image
+        run: docker build --build-arg BASE_IMAGE='${{ matrix.image }}' -f packaging/ci/Dockerfile -t epoxy-package-builder .
+      - name: Build, install, verify and remove native package
+        run: |
+          mkdir -p packages
+          docker run --rm --network none \
+            -v "$PWD/dist:/input:ro" -v "$PWD/packages:/output" \
+            -v "$PWD/packaging/ci/build.sh:/run-build.sh:ro" \
+            epoxy-package-builder bash /run-build.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.name }}
+          path: packages/*
+          if-no-files-found: error

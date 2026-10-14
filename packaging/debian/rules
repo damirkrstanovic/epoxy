@@ -1,0 +1,38 @@
+#!/usr/bin/make -f
+export CARGO_TARGET_DIR = $(CURDIR)/target
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	cargo build --frozen --release -p epoxy
+
+override_dh_auto_test:
+	desktop-file-validate packaging/common/dev.semyon.epoxy.desktop
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	cargo test --frozen --release -p epoxy --lib
+	EPOXY_TEST_PROFILE=release scripts/test-certificates-native.sh
+endif
+
+override_dh_auto_install:
+	packaging/install.sh debian/epoxy-signing target/release/epoxy
+
+override_dh_auto_clean:
+	rm -rf target
+
+# User units are opt-in. Compat 13 does not generate user-service restarts;
+# --no-enable suppresses activation on first install. Unlike the system-unit
+# helper, dh_installsystemduser does not accept --no-start.
+override_dh_installsystemduser:
+	dh_installsystemduser --no-enable
+
+# Generic debhelper cleanup removes *.orig files, including Cargo.toml.orig
+# covered by vendor checksums. Rust sources must remain byte-for-byte intact.
+override_dh_clean:
+	dh_clean --exclude=vendor/
+
+override_dh_update_autotools_config:
+
+override_dh_autoreconf:

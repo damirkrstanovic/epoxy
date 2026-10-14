@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Epoxy Signing
+Comment=Sign ePorezi forms with your smart card
+Exec=epoxy
+TryExec=epoxy
+Icon=epoxy-signing
+Terminal=false
+Categories=Office;Finance;
+Keywords=eporezi;smartcard;certificate;signing;
+StartupNotify=false

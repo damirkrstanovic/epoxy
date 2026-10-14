@@ -1,0 +1,19 @@
+Source: epoxy-signing
+Section: utils
+Priority: optional
+Maintainer: Epoxy contributors <noreply@github.com>
+Build-Depends: debhelper-compat (= 13), cargo (>= 1.89), rustc (>= 1.89), pkg-config, libclang-dev,
+ libgtk-4-dev (>= 4.4), libnss3-dev, libnspr4-dev, libxml2-dev,
+ libxmlsec1-dev (>= 1.2.39), libnss3-tools, xmlsec1, desktop-file-utils
+Standards-Version: 4.7.0
+Homepage: https://github.com/semyon2105/epoxy
+Rules-Requires-Root: no
+
+Package: epoxy-signing
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, opensc, pcscd, libccid
+Conflicts: epoxy, epoxy-git
+Description: smart-card signing helper for ePorezi
+ SmartBox-compatible signing with GTK PIN entry, tray controls, and OpenSC
+ support. Uses distribution-provided native libraries. Installation does not
+ enable services or modify user certificate databases.

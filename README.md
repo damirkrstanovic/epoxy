@@ -14,6 +14,12 @@ This tool is provided as-is under the MIT License. Please note:
 
 * This project is not affiliated with the Serbian Tax Administration (Poreska Uprava).
 
+## Native packages
+
+For Arch, Fedora, Debian and Ubuntu package builds, installation, OpenSC setup
+and optional desktop startup, see [native packaging](packaging/README.md).
+These packages include the GTK/tray interface and use system libraries.
+
 ## Quick start
 
 ### Arch Linux
