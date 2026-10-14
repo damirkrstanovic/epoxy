@@ -69,6 +69,18 @@ control thread checks expiry every 50 ms when idle, with bounded additional
 delay while handling a client. Application native signing/PIN waits do not
 block that thread.
 
+Startup collision errors name the actual diagnostics Unix socket, not the portal
+TCP port. A bounded same-user peer check reports the listener PID when available.
+Quit that instance from its tray/launching terminal, or stop its user service, then
+retry. Inspect Unix sockets with `ss -xlpn` (filter on `control.sock`), rather than
+searching for TCP port 17165.
+
+If a verified private socket refuses connections, the error explains that no
+process is listening and gives stale-file recovery guidance. With Epoxy stopped,
+remove only `$XDG_RUNTIME_DIR/epoxy/control.sock` before restarting. If the endpoint
+cannot be verified, startup gives inspection guidance without recommending removal.
+The probe sends no commands, changes no diagnostic policy and has a 200 ms bound.
+
 An existing endpoint is never deleted automatically at startup. Normally the
 socket is removed on shutdown. After an abnormal exit, first confirm that no
 Epoxy instance is running; then inspect the owner/type of the private socket
